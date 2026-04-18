@@ -134,3 +134,17 @@ uv run ruff check src tests
 ## License
 
 MIT (or project default).
+
+## Docs
+
+Deeper documentation lives in [`docs/`](docs/README.md):
+
+- [Concepts](docs/concepts.md) — the mental model (objects, properties, vectors, registration).
+- [Architecture](docs/architecture.md) — module layout, LanceDB usage, score
+  conversion, null-clearing, concurrency.
+- [API reference](docs/api.md) — full signature and behavior for every public
+  method, dataclass, and exception.
+- [Filter syntax](docs/filters.md) — DataFusion SQL `where=` examples and
+  escaping guidance.
+- [Testing](docs/testing.md) — what the 84-case suite covers and which tests
+  gate v1.
