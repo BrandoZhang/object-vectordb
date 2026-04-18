@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-REGISTRY_FILENAME = "object_store_registry.json"
+REGISTRY_FILENAME = "object_vectordb_registry.json"
 REGISTRY_VERSION = 1
 VECTOR_COLUMN_PREFIX = "__vec_"
 

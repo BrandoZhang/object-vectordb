@@ -1,6 +1,6 @@
-# `object_store` Documentation
+# `object_vectordb` Documentation
 
-Welcome. This folder documents the design and public API of the `object_store`
+Welcome. This folder documents the design and public API of the `object_vectordb`
 Python library — a thin, object-centric layer on top of LanceDB for managing
 multimodal objects with evolving annotations and multiple named embedding
 vectors per object.
@@ -13,7 +13,7 @@ vectors per object.
    the registry, LanceDB API usage, column naming, schema evolution, score
    conversion, null-clearing strategy, concurrency.
 3. **[api.md](api.md)** — full reference for every public method on
-   `ObjectStore`, every dataclass, and every exception.
+   `ObjectVectorDB`, every dataclass, and every exception.
 4. **[filters.md](filters.md)** — the `where` filter syntax (DataFusion SQL)
    with practical examples.
 5. **[testing.md](testing.md)** — what the test suite covers and how to run
@@ -21,9 +21,9 @@ vectors per object.
 
 ## Quick links
 
-- [API: `ObjectStore.add`](api.md#add)
-- [API: `ObjectStore.update`](api.md#update)
-- [API: `ObjectStore.search`](api.md#search)
+- [API: `ObjectVectorDB.add`](api.md#add)
+- [API: `ObjectVectorDB.update`](api.md#update)
+- [API: `ObjectVectorDB.search`](api.md#search)
 - [Architecture: score conversion](architecture.md#score-conversion)
 - [Architecture: null-clearing](architecture.md#null-clearing)
 - [Concepts: why register vector fields?](concepts.md#why-register-vector-fields)

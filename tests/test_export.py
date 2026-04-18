@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from object_store import VectorFieldNotRegistered
+from object_vectordb import VectorFieldNotRegistered
 
 
 def test_export_vectors_returns_aligned_arrays(store):

@@ -1,9 +1,9 @@
 """LanceDB backend. All lancedb and pyarrow code lives here.
 
-The public `ObjectStore` class in `store.py` delegates to this backend through
+The public `ObjectVectorDB` class in `db.py` delegates to this backend through
 Python-native types only. Swapping backends (e.g. to Qdrant/Milvus) would mean
 writing a new class with the same method signatures and replacing the import
-in `store.py`.
+in `db.py`.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _quote_literal(value: str) -> str:
 
 
 class LanceDBBackend:
-    """All LanceDB-specific operations. Instantiated once per `ObjectStore`."""
+    """All LanceDB-specific operations. Instantiated once per `ObjectVectorDB`."""
 
     def __init__(
         self,

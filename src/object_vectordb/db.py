@@ -1,4 +1,4 @@
-"""Public `ObjectStore` class.
+"""Public `ObjectVectorDB` class.
 
 This module must not import `lancedb` or `pyarrow`. All backend-specific operations
 go through `LanceDBBackend`.
@@ -16,11 +16,11 @@ from .registry import SchemaRegistry
 from .types import IndexInfo, ObjectData, ObjectUpdate, SearchResult, VectorFieldInfo
 
 
-class ObjectStore:
+class ObjectVectorDB:
     """Object-centric multimodal store built on LanceDB.
 
     Example:
-        store = ObjectStore(uri="data/media", table_name="videos")
+        store = ObjectVectorDB(uri="data/media", table_name="videos")
         store.register_vector_field("clip", dim=512)
         store.add("v1", properties={"title": "t"}, vectors={"clip": [...]})
         results = store.search([...], vector_field="clip", limit=10)

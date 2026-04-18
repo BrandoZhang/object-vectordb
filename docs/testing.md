@@ -57,7 +57,7 @@ has changed:
 ```python
 @pytest.fixture
 def store(tmp_path):
-    return ObjectStore(uri=str(tmp_path / "db"), table_name="objects")
+    return ObjectVectorDB(uri=str(tmp_path / "db"), table_name="objects")
 ```
 
 Every test gets its own temp directory, so stores are fully isolated. No

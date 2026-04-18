@@ -1,13 +1,13 @@
-"""Custom exceptions for the object_store library."""
+"""Custom exceptions for the object_vectordb library."""
 
 from __future__ import annotations
 
 
-class ObjectStoreError(Exception):
-    """Base class for all object_store errors."""
+class ObjectVectorDBError(Exception):
+    """Base class for all object_vectordb errors."""
 
 
-class ObjectNotFound(ObjectStoreError, KeyError):
+class ObjectNotFound(ObjectVectorDBError, KeyError):
     """Raised when an operation targets an object_id that does not exist."""
 
     def __init__(self, object_id: str):
@@ -15,7 +15,7 @@ class ObjectNotFound(ObjectStoreError, KeyError):
         self.object_id = object_id
 
 
-class DuplicateObject(ObjectStoreError):
+class DuplicateObject(ObjectVectorDBError):
     """Raised when add() is called with an object_id that already exists."""
 
     def __init__(self, object_id: str):
@@ -23,7 +23,7 @@ class DuplicateObject(ObjectStoreError):
         self.object_id = object_id
 
 
-class VectorFieldNotRegistered(ObjectStoreError):
+class VectorFieldNotRegistered(ObjectVectorDBError):
     """Raised when a vector operation targets an unregistered field."""
 
     def __init__(self, name: str):
@@ -34,7 +34,7 @@ class VectorFieldNotRegistered(ObjectStoreError):
         self.name = name
 
 
-class DimensionMismatch(ObjectStoreError):
+class DimensionMismatch(ObjectVectorDBError):
     """Raised when a vector's length does not match its registered dimensionality."""
 
     def __init__(self, name: str, expected: int, got: int):
@@ -44,11 +44,11 @@ class DimensionMismatch(ObjectStoreError):
         self.got = got
 
 
-class SchemaError(ObjectStoreError):
+class SchemaError(ObjectVectorDBError):
     """Raised for schema-level violations (bad names, type conflicts, etc.)."""
 
 
-class MetricMismatch(ObjectStoreError):
+class MetricMismatch(ObjectVectorDBError):
     """Raised when a search metric conflicts with the existing index's metric."""
 
     def __init__(self, field: str, requested: str, index_metric: str):

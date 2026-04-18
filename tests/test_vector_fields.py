@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from object_store import (
+from object_vectordb import (
     DimensionMismatch,
-    ObjectStore,
+    ObjectVectorDB,
     SchemaError,
     VectorFieldNotRegistered,
 )
@@ -45,7 +45,7 @@ def test_write_without_register_raises(store):
 
 
 def test_auto_register(tmp_path):
-    s = ObjectStore(uri=str(tmp_path / "db"), auto_register=True)
+    s = ObjectVectorDB(uri=str(tmp_path / "db"), auto_register=True)
     s.add("x", vectors={"clip": [1.0, 2.0, 3.0]})
     fields = {v.name: v.dim for v in s.vector_fields()}
     assert fields == {"clip": 3}

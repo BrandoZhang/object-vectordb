@@ -1,17 +1,17 @@
-"""object_store — Multimodal object store on top of LanceDB."""
+"""object_vectordb — Multimodal object-centric vector database on top of LanceDB."""
 
 from __future__ import annotations
 
+from .db import ObjectVectorDB
 from .exceptions import (
     DimensionMismatch,
     DuplicateObject,
     MetricMismatch,
     ObjectNotFound,
-    ObjectStoreError,
+    ObjectVectorDBError,
     SchemaError,
     VectorFieldNotRegistered,
 )
-from .store import ObjectStore
 from .types import (
     IndexInfo,
     ObjectData,
@@ -27,9 +27,9 @@ __all__ = [
     "MetricMismatch",
     "ObjectData",
     "ObjectNotFound",
-    "ObjectStore",
-    "ObjectStoreError",
     "ObjectUpdate",
+    "ObjectVectorDB",
+    "ObjectVectorDBError",
     "SchemaError",
     "SearchResult",
     "VectorFieldInfo",

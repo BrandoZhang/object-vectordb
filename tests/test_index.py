@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from object_store import SchemaError, VectorFieldNotRegistered
+from object_vectordb import SchemaError, VectorFieldNotRegistered
 
 
 def _seed(store, n=300, dim=4):

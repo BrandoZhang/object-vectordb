@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from object_store import ObjectStore
+from object_vectordb import ObjectVectorDB
 
 
 @pytest.fixture
 def store(tmp_path):
-    return ObjectStore(uri=str(tmp_path / "db"), table_name="objects")
+    return ObjectVectorDB(uri=str(tmp_path / "db"), table_name="objects")
 
 
 @pytest.fixture
@@ -16,8 +16,8 @@ def store_factory(tmp_path):
     counter = {"n": 0}
     uri = str(tmp_path / "shared")
 
-    def make(table_name: str = "objects", **kw) -> ObjectStore:
+    def make(table_name: str = "objects", **kw) -> ObjectVectorDB:
         counter["n"] += 1
-        return ObjectStore(uri=uri, table_name=table_name, **kw)
+        return ObjectVectorDB(uri=uri, table_name=table_name, **kw)
 
     return make

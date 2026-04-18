@@ -1,4 +1,4 @@
-# object-store
+# object-vectordb
 
 [![CI](https://github.com/BrandoZhang/object-vectordb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BrandoZhang/object-vectordb/actions/workflows/ci.yml)
 
@@ -26,9 +26,9 @@ uv sync --all-extras
 ## Quick start
 
 ```python
-from object_store import ObjectStore, ObjectUpdate
+from object_vectordb import ObjectVectorDB, ObjectUpdate
 
-store = ObjectStore(uri="data/my_store", table_name="media")
+store = ObjectVectorDB(uri="data/my_store", table_name="media")
 
 # Register vector fields (zero-copy — existing rows keep their data, new column is null)
 store.register_vector_field("text_openai", dim=1536, description="text-embedding-3-small")
@@ -64,7 +64,7 @@ for h in hits:
 # Multi-route retrieval via RRF
 r_text  = store.search(q_text,  vector_field="text_openai", limit=20)
 r_image = store.search(q_image, vector_field="image_clip", limit=20)
-merged  = ObjectStore.rrf_merge(r_text, r_image, k=60, limit=10)
+merged  = ObjectVectorDB.rrf_merge(r_text, r_image, k=60, limit=10)
 
 # Index management
 store.create_index(
@@ -110,14 +110,14 @@ to change metrics.
 ## Architecture
 
 ```
-ObjectStore                 ── public API, Python-native types only
+ObjectVectorDB                 ── public API, Python-native types only
     │
-    ├── SchemaRegistry      ── JSON sidecar at <uri>/object_store_registry.json
+    ├── SchemaRegistry      ── JSON sidecar at <uri>/object_vectordb_registry.json
     └── LanceDBBackend      ── all lancedb / pyarrow code
 ```
 
 Swapping backends (e.g. to Qdrant) means writing a new backend class with the same
-method signatures and replacing the import in `store.py`. There is no formal plugin
+method signatures and replacing the import in `db.py`. There is no formal plugin
 system — just a single concrete backend today and disciplined layering.
 
 ## Concurrency

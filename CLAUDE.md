@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`object_store` is a Python library that layers an object-centric API over [LanceDB](https://lancedb.com). Callers work in terms of "objects" with a dynamic property bag and named embedding vectors; they never see LanceDB tables, columns, or pyarrow types.
+`object_vectordb` is a Python library that layers an object-centric API over [LanceDB](https://lancedb.com). Callers work in terms of "objects" with a dynamic property bag and named embedding vectors; they never see LanceDB tables, columns, or pyarrow types.
 
 ## Commands
 
@@ -25,19 +25,19 @@ CI (`.github/workflows/ci.yml`) runs lint, a pytest matrix over Python 3.10/3.11
 ## Architecture — the layering rule
 
 ```
-ObjectStore  (src/object_store/store.py)      ← public API, Python-native types only
+ObjectVectorDB  (src/object_vectordb/db.py)      ← public API, Python-native types only
     │
     ├── SchemaRegistry  (registry.py)          ← JSON sidecar metadata
     └── LanceDBBackend  (backend.py)           ← all lancedb + pyarrow code
 ```
 
-**Hard rule: `store.py` must not import `lancedb` or `pyarrow`.** Every storage-engine specific call lives in `backend.py`. Swapping backends (hypothetically to Qdrant or Milvus) should be a single-file change. Violating this is the main thing to reject in PRs.
+**Hard rule: `db.py` must not import `lancedb` or `pyarrow`.** Every storage-engine specific call lives in `backend.py`. Swapping backends (hypothetically to Qdrant or Milvus) should be a single-file change. Violating this is the main thing to reject in PRs.
 
 ## Architecture — big picture
 
 **Properties vs. vectors are separate namespaces.** The API takes them as distinct arguments. Internally, vector columns are prefixed `__vec_<name>`; property names are rejected if they start with that prefix. Property names otherwise are stored as-is.
 
-**Vector fields must be registered before use.** `register_vector_field(name, dim)` adds a zero-copy `FixedSizeList<float32, dim>` column via LanceDB's `table.add_columns(pa.field(...))`. Registration is tracked in a JSON sidecar at `<uri>/object_store_registry.json` — NOT inside the Lance table. The registry is the source of truth for which columns are vectors vs. properties, each vector's dim, and each vector's index config.
+**Vector fields must be registered before use.** `register_vector_field(name, dim)` adds a zero-copy `FixedSizeList<float32, dim>` column via LanceDB's `table.add_columns(pa.field(...))`. Registration is tracked in a JSON sidecar at `<uri>/object_vectordb_registry.json` — NOT inside the Lance table. The registry is the source of truth for which columns are vectors vs. properties, each vector's dim, and each vector's index config.
 
 **Schema grows automatically for properties.** Property columns are added on first write via Arrow-type inference from the sample value (`arrow_utils.python_value_to_arrow_type`). `None` alone cannot be inferred and raises `SchemaError`.
 

@@ -1,12 +1,12 @@
 # API Reference
 
-All public names are re-exported from the top-level `object_store` package.
+All public names are re-exported from the top-level `object_vectordb` package.
 
 ```python
-from object_store import (
-    ObjectStore,
+from object_vectordb import (
+    ObjectVectorDB,
     ObjectData, ObjectUpdate, SearchResult, VectorFieldInfo, IndexInfo,
-    ObjectStoreError,
+    ObjectVectorDBError,
     ObjectNotFound, DuplicateObject, VectorFieldNotRegistered,
     DimensionMismatch, SchemaError, MetricMismatch,
 )
@@ -15,12 +15,12 @@ from object_store import (
 The API deliberately uses only Python-native types (`str`, `int`, `float`,
 `list`, `dict`, `numpy.ndarray`). No `lancedb` or `pyarrow` types leak out.
 
-## Class: `ObjectStore`
+## Class: `ObjectVectorDB`
 
 ### Constructor
 
 ```python
-ObjectStore(uri: str, table_name: str = "objects", auto_register: bool = False)
+ObjectVectorDB(uri: str, table_name: str = "objects", auto_register: bool = False)
 ```
 
 - `uri` — local directory path or a cloud URI (`s3://...`) that LanceDB can
@@ -256,7 +256,7 @@ Raises:
 ### `rrf_merge` (static method)
 
 ```python
-ObjectStore.rrf_merge(
+ObjectVectorDB.rrf_merge(
     *result_lists: list[SearchResult],
     k: int = 60,
     limit: int | None = None,
@@ -450,7 +450,7 @@ class IndexInfo:
 
 ## Exceptions
 
-All exceptions inherit from `ObjectStoreError`, which itself inherits from
+All exceptions inherit from `ObjectVectorDBError`, which itself inherits from
 `Exception`. `ObjectNotFound` additionally inherits from `KeyError` for
 compatibility with dict-style callers.
 

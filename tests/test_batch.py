@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from object_store import DuplicateObject, ObjectNotFound, ObjectUpdate
+from object_vectordb import DuplicateObject, ObjectNotFound, ObjectUpdate
 
 
 def test_add_many_inserts_all(store):

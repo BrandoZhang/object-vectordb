@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from object_store import SchemaError
+from object_vectordb import SchemaError
 
 
 def test_schema_reports_properties_and_vectors_separately(store):

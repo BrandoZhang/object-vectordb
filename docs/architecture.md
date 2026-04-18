@@ -6,13 +6,13 @@ read [concepts.md](concepts.md).
 ## Module layout
 
 ```
-src/object_store/
+src/object_vectordb/
 ├── __init__.py      # public re-exports
 ├── types.py         # dataclasses: ObjectData, SearchResult, ObjectUpdate,
 │                    #              VectorFieldInfo, IndexInfo
 ├── exceptions.py    # ObjectNotFound, DuplicateObject, VectorFieldNotRegistered,
 │                    # DimensionMismatch, SchemaError, MetricMismatch
-├── store.py         # ObjectStore — public class. Uses only Python-native
+├── db.py         # ObjectVectorDB — public class. Uses only Python-native
 │                    #               types. Must not import lancedb or pyarrow.
 ├── backend.py       # LanceDBBackend — all LanceDB + pyarrow code.
 ├── registry.py      # SchemaRegistry — JSON sidecar metadata.
@@ -23,16 +23,16 @@ src/object_store/
 ### Layering rule
 
 ```
-ObjectStore  (public, backend-agnostic)
+ObjectVectorDB  (public, backend-agnostic)
     │
     ├── SchemaRegistry  (JSON sidecar)
     └── LanceDBBackend  (lancedb + pyarrow)
 ```
 
-The `store.py` module has no dependency on `lancedb` or `pyarrow`. All
+The `db.py` module has no dependency on `lancedb` or `pyarrow`. All
 storage-engine specifics live inside `backend.py`. To swap backends in the
 future (e.g. to Qdrant or Milvus), you would write a new class with the same
-method signatures and change the import in `store.py`. This is **not** a
+method signatures and change the import in `db.py`. This is **not** a
 formal plugin system — there is no abstract base class and no registry of
 backends. Just disciplined layering.
 
@@ -43,7 +43,7 @@ The registry is a JSON file written next to the Lance table directory:
 ```
 <uri>/
 ├── <table_name>.lance/                  # LanceDB's own files
-└── object_store_registry.json           # our metadata sidecar
+└── object_vectordb_registry.json           # our metadata sidecar
 ```
 
 It tracks:
@@ -83,7 +83,7 @@ assumes a single writer — there is no file-level lock.
 
 ### Why JSON sidecar, not a Lance metadata table?
 
-The registry is ~1 KB of config-shaped data read on every `ObjectStore`
+The registry is ~1 KB of config-shaped data read on every `ObjectVectorDB`
 method call. A JSON file loads in microseconds, versions cleanly in git for
 test repos, is human-inspectable, and avoids creating a second Lance dataset
 just to store a handful of settings. A Lance-table registry would introduce
@@ -173,7 +173,7 @@ non-None value first, then you can subsequently clear that column.
   raises `DuplicateObject` if the id exists. This is race-prone in a
   multi-writer world — documented as single-writer.
 - **`update` is silent on empty match.** `table.update(where=...)` affects 0
-  rows without complaint. `ObjectStore.update()` pre-checks existence and
+  rows without complaint. `ObjectVectorDB.update()` pre-checks existence and
   raises `ObjectNotFound`.
 - **`values={col: None}` has round-trip bugs** (LanceDB issues #1325, #3105).
   We avoid this path entirely. Scalar null-clearing uses
@@ -272,7 +272,7 @@ store.update("x", vectors={"image_clip": None})
 
 ## RRF (Reciprocal Rank Fusion)
 
-`ObjectStore.rrf_merge(list1, list2, ..., k=60, limit=None)` is a pure Python
+`ObjectVectorDB.rrf_merge(list1, list2, ..., k=60, limit=None)` is a pure Python
 utility that combines multiple `SearchResult` lists (e.g. a text-vector
 search and an image-vector search) into a single fused ranking:
 
@@ -288,5 +288,5 @@ occurrence of each id are preserved on the returned `SearchResult`.
 
 Single-writer only. The JSON sidecar is not locked. Concurrent readers are
 safe: LanceDB supports concurrent reads on a table, and the registry is
-re-read on every ObjectStore construction. For multi-writer, route writes
+re-read on every ObjectVectorDB construction. For multi-writer, route writes
 through a queue consumer running in a single process.

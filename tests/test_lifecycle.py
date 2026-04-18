@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from object_store import DuplicateObject, ObjectData
+from object_vectordb import DuplicateObject, ObjectData
 
 
 def test_add_get_delete_roundtrip(store):

@@ -1,4 +1,4 @@
-"""Public dataclasses returned by the ObjectStore API."""
+"""Public dataclasses returned by the ObjectVectorDB API."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 
 @dataclass
 class ObjectData:
-    """An object as returned by `ObjectStore.get()`."""
+    """An object as returned by `ObjectVectorDB.get()`."""
 
     object_id: str
     properties: dict[str, Any]
@@ -17,7 +17,7 @@ class ObjectData:
 
 @dataclass
 class SearchResult:
-    """A single hit from `ObjectStore.search()`.
+    """A single hit from `ObjectVectorDB.search()`.
 
     `score` is a similarity score where higher means more similar.
     - For metric="cosine": score = 1 - cosine_distance, range [-1, 1].
@@ -33,7 +33,7 @@ class SearchResult:
 
 @dataclass
 class ObjectUpdate:
-    """Batch-update entry for `ObjectStore.batch_update()`."""
+    """Batch-update entry for `ObjectVectorDB.batch_update()`."""
 
     object_id: str
     properties: dict[str, Any] | None = None

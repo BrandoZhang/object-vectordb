@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from object_store import DimensionMismatch, MetricMismatch, VectorFieldNotRegistered
+from object_vectordb import DimensionMismatch, MetricMismatch, VectorFieldNotRegistered
 
 
 def _setup_known(store, vectors):

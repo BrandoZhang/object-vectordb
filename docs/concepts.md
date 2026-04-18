@@ -57,7 +57,7 @@ Registration serves two purposes:
    was added and *by whom*. An explicit registration call provides a clear
    code point to trace.
 
-For prototyping, `ObjectStore(..., auto_register=True)` infers a vector
+For prototyping, `ObjectVectorDB(..., auto_register=True)` infers a vector
 field's dimensionality from the first value written under that name. Explicit
 registration is recommended for production use.
 

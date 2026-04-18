@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from object_store import ObjectNotFound
+from object_vectordb import ObjectNotFound
 
 
 def test_update_properties_only_preserves_vectors(store):
