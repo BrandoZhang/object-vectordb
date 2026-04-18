@@ -31,9 +31,7 @@ def test_index_survives_reopen(tmp_path):
     s1.register_vector_field("v", dim=4)
     for i in range(300):
         s1.add(f"id{i}", vectors={"v": [float(i), 0.0, 0.0, 0.0]})
-    s1.create_index(
-        "v", index_type="IVF_PQ", metric="cosine", num_partitions=2, num_sub_vectors=1
-    )
+    s1.create_index("v", index_type="IVF_PQ", metric="cosine", num_partitions=2, num_sub_vectors=1)
     del s1
 
     s2 = ObjectStore(uri=uri, table_name="objs")

@@ -7,11 +7,13 @@ from object_store import DuplicateObject, ObjectNotFound, ObjectUpdate
 
 def test_add_many_inserts_all(store):
     store.register_vector_field("v", dim=2)
-    store.add_many([
-        {"object_id": "a", "properties": {"n": 1}, "vectors": {"v": [1.0, 0.0]}},
-        {"object_id": "b", "properties": {"n": 2}, "vectors": {"v": [0.0, 1.0]}},
-        {"object_id": "c", "properties": {"n": 3}, "vectors": {"v": [1.0, 1.0]}},
-    ])
+    store.add_many(
+        [
+            {"object_id": "a", "properties": {"n": 1}, "vectors": {"v": [1.0, 0.0]}},
+            {"object_id": "b", "properties": {"n": 2}, "vectors": {"v": [0.0, 1.0]}},
+            {"object_id": "c", "properties": {"n": 3}, "vectors": {"v": [1.0, 1.0]}},
+        ]
+    )
     assert store.get("a").properties["n"] == 1
     assert store.get("b").properties["n"] == 2
     assert store.get("c").properties["n"] == 3
@@ -19,10 +21,12 @@ def test_add_many_inserts_all(store):
 
 def test_add_many_rejects_duplicates_in_batch(store):
     with pytest.raises(DuplicateObject):
-        store.add_many([
-            {"object_id": "a", "properties": {"n": 1}},
-            {"object_id": "a", "properties": {"n": 2}},
-        ])
+        store.add_many(
+            [
+                {"object_id": "a", "properties": {"n": 1}},
+                {"object_id": "a", "properties": {"n": 2}},
+            ]
+        )
 
 
 def test_add_many_rejects_existing_id(store):
@@ -36,11 +40,13 @@ def test_batch_update_mixes_properties_and_vectors(store):
     for oid in ["a", "b", "c"]:
         store.add(oid, properties={"n": 0}, vectors={"v": [0.0, 0.0]})
 
-    store.batch_update([
-        ObjectUpdate(object_id="a", properties={"n": 1}),
-        ObjectUpdate(object_id="b", vectors={"v": [1.0, 1.0]}),
-        ObjectUpdate(object_id="c", properties={"n": 3}, vectors={"v": [2.0, 2.0]}),
-    ])
+    store.batch_update(
+        [
+            ObjectUpdate(object_id="a", properties={"n": 1}),
+            ObjectUpdate(object_id="b", vectors={"v": [1.0, 1.0]}),
+            ObjectUpdate(object_id="c", properties={"n": 3}, vectors={"v": [2.0, 2.0]}),
+        ]
+    )
     assert store.get("a").properties["n"] == 1
     assert store.get("a").vectors["v"] == pytest.approx([0.0, 0.0])
     assert store.get("b").properties["n"] == 0
@@ -54,10 +60,12 @@ def test_batch_update_null_clears(store):
     store.add("a", properties={"n": 1}, vectors={"v": [1.0, 2.0]})
     store.add("b", properties={"n": 2}, vectors={"v": [3.0, 4.0]})
 
-    store.batch_update([
-        ObjectUpdate(object_id="a", properties={"n": None}),
-        ObjectUpdate(object_id="b", vectors={"v": None}),
-    ])
+    store.batch_update(
+        [
+            ObjectUpdate(object_id="a", properties={"n": None}),
+            ObjectUpdate(object_id="b", vectors={"v": None}),
+        ]
+    )
     assert store.get("a").properties["n"] is None
     assert store.get("b").vectors["v"] is None
 

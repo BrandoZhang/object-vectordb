@@ -250,9 +250,7 @@ class LanceDBBackend:
             seen.add(object_id)
             if self.exists(object_id):
                 raise DuplicateObject(object_id)
-            rows.append(
-                self._prepare_row(object_id, item.get("properties"), item.get("vectors"))
-            )
+            rows.append(self._prepare_row(object_id, item.get("properties"), item.get("vectors")))
         table = self._batch_from_rows(rows)
         self._table.merge_insert(OBJECT_ID_COLUMN).when_not_matched_insert_all().execute(table)
 
@@ -395,9 +393,7 @@ class LanceDBBackend:
     def _clear_scalar(self, object_id: str, property_name: str) -> None:
         # Ensure the column exists (caller may be clearing a pre-existing but unused column).
         if property_name not in self._table_columns():
-            raise SchemaError(
-                f"Cannot clear property {property_name!r}: column does not exist."
-            )
+            raise SchemaError(f"Cannot clear property {property_name!r}: column does not exist.")
         arrow_type = self._column_type(property_name)
         sql_type = arrow_type_to_sql_type(arrow_type)
         self._table.update(
@@ -544,9 +540,7 @@ class LanceDBBackend:
             # Filter to requested properties; strip internal vector columns and _rowid, _score.
             row.pop("_rowid", None)
             row.pop("_score", None)
-            properties = {
-                k: v for k, v in row.items() if not k.startswith(VECTOR_COLUMN_PREFIX)
-            }
+            properties = {k: v for k, v in row.items() if not k.startswith(VECTOR_COLUMN_PREFIX)}
             if select is not None:
                 properties = {k: v for k, v in properties.items() if k in set(select)}
             results.append(
@@ -700,8 +694,6 @@ class LanceDBBackend:
             # list() returns the flattened per-spec — for the public wrapper it's easier
             # to expose {object_id, properties} without vectors by default.
             if select is not None:
-                obj["properties"] = {
-                    k: v for k, v in obj["properties"].items() if k in set(select)
-                }
+                obj["properties"] = {k: v for k, v in obj["properties"].items() if k in set(select)}
             out.append(obj)
         return out

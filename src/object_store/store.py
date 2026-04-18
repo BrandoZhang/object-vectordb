@@ -177,8 +177,7 @@ class ObjectStore:
         if limit is not None:
             ranked = ranked[:limit]
         return [
-            SearchResult(object_id=oid, score=score, properties=props[oid])
-            for oid, score in ranked
+            SearchResult(object_id=oid, score=score, properties=props[oid]) for oid, score in ranked
         ]
 
     # ------------------------------------------------------------------
@@ -226,9 +225,7 @@ class ObjectStore:
         limit: int | None = None,
         offset: int | None = None,
     ) -> list[ObjectData]:
-        rows = self._backend.list_objects(
-            where=where, select=select, limit=limit, offset=offset
-        )
+        rows = self._backend.list_objects(where=where, select=select, limit=limit, offset=offset)
         return [
             ObjectData(
                 object_id=r["object_id"],

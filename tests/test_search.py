@@ -100,6 +100,8 @@ def test_metric_mismatch_with_existing_index_raises(store):
     for i in range(300):
         # enough rows for IVF index
         store.add(f"id{i}", vectors={"v": [float(i), 0.0, 0.0]})
-    store.create_index("v", index_type="IVF_PQ", metric="cosine", num_partitions=2, num_sub_vectors=1)
+    store.create_index(
+        "v", index_type="IVF_PQ", metric="cosine", num_partitions=2, num_sub_vectors=1
+    )
     with pytest.raises(MetricMismatch):
         store.search([1.0, 0.0, 0.0], vector_field="v", limit=1, metric="l2")

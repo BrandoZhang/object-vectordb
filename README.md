@@ -1,5 +1,7 @@
 # object-store
 
+[![CI](https://github.com/BrandoZhang/object-vectordb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BrandoZhang/object-vectordb/actions/workflows/ci.yml)
+
 Multimodal object store built on [LanceDB](https://lancedb.com). Manages objects with
 an evolving dynamic property schema and multiple named embedding vectors per object.
 
