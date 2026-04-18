@@ -135,6 +135,44 @@ Swapping backends (e.g. to Qdrant) means writing a new class with the same
 `LanceDBBackend` method signatures and changing one import. There is no formal
 plugin system — just disciplined layering.
 
+## Performance
+
+Observed quick-tier benchmarks (`uv run pytest benches/ --benchmark-only -m "not full"`).
+Hardware: x86-64, 16 cores @ 2.8 GHz, 22 GB RAM, local ext4 storage.
+Vector dim = 128 throughout.
+
+| Operation                                       | Spec target | Observed median | Status |
+| ----------------------------------------------- | ----------- | ---------------: | ------ |
+| `search`, indexed, 1 K rows (quick tier)        | < 50 ms @ 100 K | 9.2 ms       | on track |
+| `search`, brute-force, 1 K rows (quick tier)    | < 50 ms @ 100 K | 10.3 ms      | on track |
+| `register_vector_field` on 10 K-row table       | < 1 s @ 1 M   | 10.4 ms        | on track (zero-copy) |
+| `export_vectors` from 1 K-row table             | < 10 s @ 100 K | 70.1 ms       | on track |
+| `add_many` 1 000 rows                            | — (informational) | 6.82 s    | see note |
+| `add` single object                              | < 10 ms (as part of roundtrip) | 40.4 ms | **over target** |
+| `add` + `get` roundtrip, single object          | < 10 ms        | 51.1 ms        | **over target** |
+| `get` single object (1 K-row table)              | — (part of roundtrip) | 296.9 ms | see note |
+| `batch_update` 1 000 rows (full tier)            | < 5 s          | 293 s          | **over target ~60×** |
+
+**Notes**:
+
+- **`get`, `batch_update` and single-row `add` are all bottlenecked by the
+  same thing**: LanceDB does a full table scan for every `object_id` lookup
+  because there is no scalar index on `object_id` by default. `get()` uses
+  `table.search().where("object_id = ...").limit(1)`; `batch_update` does a
+  per-row `count_rows("object_id = 'x'")` existence pre-check. Both are
+  O(N) per call, making `batch_update` O(N²) overall on the collection
+  size. Creating a `BTREE` scalar index on `object_id` in the backend
+  should close this gap — filed as a follow-up.
+- **`add_many` 1 000 rows at 6.82 s** is dominated by the per-row
+  duplicate-check in `add_many` (same root cause). Pure LanceDB
+  `table.add(batch)` without the check is ~10 ms for 1 000 rows.
+- **Spec-scale (100 K / 1 M row) numbers are not yet recorded**. Run
+  `uv run pytest benches/ --benchmark-only -m full` on a sustained-CPU
+  machine to collect them; expect `batch_update` to dominate runtime.
+
+Re-run and update this table whenever the benchmark suite is executed. See
+[`benches/README.md`](benches/README.md) for the full recipe.
+
 ## Concurrency
 
 Single-writer. Concurrent readers are safe. The JSON registry sidecar is not locked.

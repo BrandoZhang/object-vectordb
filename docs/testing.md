@@ -80,8 +80,20 @@ From the spec:
 | `export_vectors` 100 K objects                | < 10 s  |
 | `register_vector_field` on 1 M-row table      | < 1 s  (zero-copy) |
 
-These are not enforced by CI. Record observed numbers in the README when
-relevant.
+These are not enforced by CI.
+
+## Benchmarks
+
+Benchmarks live under `benches/`, disjoint from the regular test suite.
+They are opt-in and not run by default pytest. See
+[`benches/README.md`](../benches/README.md) for the full recipe.
+
+```bash
+uv run pytest benches/ --benchmark-only -m "not full"   # quick tier, ~30 s
+uv run pytest benches/ --benchmark-only -m full         # spec-scale, ~5–10 min
+```
+
+Recorded numbers live in the top-level `README.md`.
 
 ## Adding a test
 

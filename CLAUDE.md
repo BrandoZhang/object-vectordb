@@ -15,9 +15,12 @@ uv sync --all-extras              # install runtime + dev deps into .venv
 uv run pytest -q                   # full test suite (~5 min, LanceDB IVF index tests dominate)
 uv run pytest tests/test_search.py # a single file
 uv run pytest tests/test_search.py::test_search_dot_score_recovers_raw_dot -q   # a single test
-uv run ruff check src tests
-uv run ruff format src tests       # apply (CI runs --check)
+uv run ruff check src tests benches
+uv run ruff format src tests benches   # apply (CI runs --check)
 uv build                           # sdist + wheel into dist/
+
+uv run pytest benches/ --benchmark-only -m "not full"   # quick benchmark tier (~30 s)
+uv run pytest benches/ --benchmark-only -m full         # spec-scale benchmarks (~5–10 min)
 ```
 
 CI (`.github/workflows/ci.yml`) runs lint, a pytest matrix over Python 3.10/3.11/3.12, and a build on every PR and push to `main`. Keep the `ruff format --check` gate green — run `uv run ruff format src tests` before committing.
