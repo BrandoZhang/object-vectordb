@@ -11,11 +11,18 @@ src/object_vectordb/
 ├── types.py         # dataclasses: ObjectData, SearchResult, ObjectUpdate,
 │                    #              VectorFieldInfo, IndexInfo
 ├── exceptions.py    # ObjectNotFound, DuplicateObject, VectorFieldNotRegistered,
-│                    # DimensionMismatch, SchemaError, MetricMismatch
-├── db.py         # ObjectVectorDB — public class. Uses only Python-native
-│                    #               types. Must not import lancedb or pyarrow.
-├── backend.py       # LanceDBBackend — all LanceDB + pyarrow code.
-├── registry.py      # SchemaRegistry — JSON sidecar metadata.
+│                    # DimensionMismatch, SchemaError, MetricMismatch,
+│                    # ObjectVectorDBError
+├── db.py            # ObjectVectorDB — the DB handle. Opens the LanceDB URI,
+│                    #   exposes collection() / list_collections() / drop_collection().
+│                    #   Uses lancedb.connect() only; no pyarrow.
+├── collection.py    # Collection — per-collection API. Owns the LanceDBBackend
+│                    #   and delegates all object operations. No lancedb or pyarrow.
+├── backend.py       # LanceDBBackend — all LanceDB + pyarrow code. One instance
+│                    #   per Collection; receives a shared lancedb connection.
+├── registry.py      # SchemaRegistry (root) + CollectionRegistry (per-collection
+│                    #   proxy). JSON sidecar with two-level structure.
+├── fusion.py        # rrf_merge — module-level rank-fusion utility.
 ├── scoring.py       # Per-metric distance → similarity score conversion.
 └── arrow_utils.py   # Python-value → pyarrow-type inference, record-batch helpers.
 ```
@@ -23,18 +30,22 @@ src/object_vectordb/
 ### Layering rule
 
 ```
-ObjectVectorDB  (public, backend-agnostic)
+ObjectVectorDB   (public, DB handle)
     │
-    ├── SchemaRegistry  (JSON sidecar)
-    └── LanceDBBackend  (lancedb + pyarrow)
+    └── Collection   (public, per-collection operations)
+            │
+            ├── CollectionRegistry   (scoped view of the JSON sidecar)
+            └── LanceDBBackend        (lancedb + pyarrow)
 ```
 
-The `db.py` module has no dependency on `lancedb` or `pyarrow`. All
-storage-engine specifics live inside `backend.py`. To swap backends in the
-future (e.g. to Qdrant or Milvus), you would write a new class with the same
-method signatures and change the import in `db.py`. This is **not** a
-formal plugin system — there is no abstract base class and no registry of
-backends. Just disciplined layering.
+- `db.py` only calls `lancedb.connect(uri)`; no pyarrow.
+- `collection.py` has no dependency on `lancedb` or `pyarrow`.
+- All storage-engine specifics live inside `backend.py`.
+
+To swap backends in the future (e.g. to Qdrant or Milvus), you would write a
+new class with the same `LanceDBBackend` method signatures and change the
+import in `collection.py`. This is **not** a formal plugin system — there is
+no abstract base class and no registry of backends. Just disciplined layering.
 
 ## Schema registry
 
@@ -55,28 +66,41 @@ It tracks:
   `num_partitions` / `num_sub_vectors` / etc. that LanceDB's `index_stats()`
   does not round-trip).
 
-Shape:
+Shape (version 2 — namespaced by collection):
 
 ```json
 {
-  "version": 1,
-  "vector_fields": {
-    "text_openai": {
-      "name": "text_openai",
-      "dim": 1536,
-      "column": "__vec_text_openai",
-      "description": "text-embedding-3-small",
-      "index": {
-        "type": "IVF_PQ",
-        "metric": "cosine",
-        "num_partitions": 256,
-        "num_sub_vectors": 16
-      }
+  "version": 2,
+  "collections": {
+    "videos": {
+      "vector_fields": {
+        "text_openai": {
+          "name": "text_openai",
+          "dim": 1536,
+          "column": "__vec_text_openai",
+          "description": "text-embedding-3-small",
+          "index": {
+            "type": "IVF_PQ",
+            "metric": "cosine",
+            "num_partitions": 256,
+            "num_sub_vectors": 16
+          }
+        }
+      },
+      "property_columns": ["title", "views", "tags"]
+    },
+    "images": {
+      "vector_fields": {"...": "..."},
+      "property_columns": ["..."]
     }
-  },
-  "property_columns": ["title", "views", "tags"]
+  }
 }
 ```
+
+Backends never see the root `SchemaRegistry` directly — they receive a
+`CollectionRegistry` proxy that scopes all reads/writes to a single collection.
+This keeps the backend code identical whether it's operating on collection A
+or collection B.
 
 Writes go through `os.replace(tmp, final)` for atomicity. The registry
 assumes a single writer — there is no file-level lock.
@@ -272,7 +296,7 @@ store.update("x", vectors={"image_clip": None})
 
 ## RRF (Reciprocal Rank Fusion)
 
-`ObjectVectorDB.rrf_merge(list1, list2, ..., k=60, limit=None)` is a pure Python
+`rrf_merge(list1, list2, ..., k=60, limit=None)` (from `object_vectordb`) is a pure Python
 utility that combines multiple `SearchResult` lists (e.g. a text-vector
 search and an image-vector search) into a single fused ranking:
 

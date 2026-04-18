@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .collection import Collection
 from .db import ObjectVectorDB
 from .exceptions import (
     DimensionMismatch,
@@ -12,6 +13,7 @@ from .exceptions import (
     SchemaError,
     VectorFieldNotRegistered,
 )
+from .fusion import rrf_merge
 from .types import (
     IndexInfo,
     ObjectData,
@@ -21,6 +23,7 @@ from .types import (
 )
 
 __all__ = [
+    "Collection",
     "DimensionMismatch",
     "DuplicateObject",
     "IndexInfo",
@@ -34,4 +37,5 @@ __all__ = [
     "SearchResult",
     "VectorFieldInfo",
     "VectorFieldNotRegistered",
+    "rrf_merge",
 ]

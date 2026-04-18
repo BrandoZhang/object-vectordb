@@ -26,31 +26,35 @@ uv sync --all-extras
 ## Quick start
 
 ```python
-from object_vectordb import ObjectVectorDB, ObjectUpdate
+from object_vectordb import ObjectVectorDB, ObjectUpdate, rrf_merge
 
-store = ObjectVectorDB(uri="data/my_store", table_name="media")
+db = ObjectVectorDB(uri="data/my_store")
+media = db.collection("media")                 # opens or creates
+notes = db.collection("notes")                 # sibling collection — isolated schema
 
-# Register vector fields (zero-copy — existing rows keep their data, new column is null)
-store.register_vector_field("text_openai", dim=1536, description="text-embedding-3-small")
-store.register_vector_field("image_clip", dim=512)
+# Register vector fields on a collection (zero-copy — existing rows keep their data,
+# new column is null). Two collections at the same URI can register the SAME field
+# name at DIFFERENT dims; they don't collide.
+media.register_vector_field("text_openai", dim=1536, description="text-embedding-3-small")
+media.register_vector_field("image_clip", dim=512)
 
 # Add an object
-store.add(
+media.add(
     "video_001",
     properties={"title": "A cat playing piano", "tags": ["cat", "piano"]},
     vectors={"text_openai": [...], "image_clip": [...]},
 )
 
 # Update — merge semantics; unspecified fields are untouched
-store.update("video_001", properties={"views": 42000})
-store.update("video_001", vectors={"text_openai": [...]})   # re-embed
+media.update("video_001", properties={"views": 42000})
+media.update("video_001", vectors={"text_openai": [...]})   # re-embed
 
 # Clear a field on a specific object
-store.update("video_001", properties={"description": None})
-store.update("video_001", vectors={"image_clip": None})
+media.update("video_001", properties={"description": None})
+media.update("video_001", vectors={"image_clip": None})
 
 # Search
-hits = store.search(
+hits = media.search(
     query_vector=[...],
     vector_field="text_openai",
     limit=10,
@@ -61,22 +65,27 @@ hits = store.search(
 for h in hits:
     print(h.object_id, h.score, h.properties["title"])
 
-# Multi-route retrieval via RRF
-r_text  = store.search(q_text,  vector_field="text_openai", limit=20)
-r_image = store.search(q_image, vector_field="image_clip", limit=20)
-merged  = ObjectVectorDB.rrf_merge(r_text, r_image, k=60, limit=10)
+# Multi-route retrieval via RRF (pure-Python utility)
+r_text  = media.search(q_text,  vector_field="text_openai", limit=20)
+r_image = media.search(q_image, vector_field="image_clip", limit=20)
+merged  = rrf_merge(r_text, r_image, k=60, limit=10)
 
 # Index management
-store.create_index(
+media.create_index(
     "text_openai", index_type="IVF_PQ", metric="cosine",
     num_partitions=256, num_sub_vectors=16,
 )
-store.rebuild_index("text_openai")
-store.drop_index("text_openai")
+media.rebuild_index("text_openai")
+media.drop_index("text_openai")
 
 # Bulk export (skips rows with null vectors)
-ids, embeddings = store.export_vectors("text_openai", where="views > 1000")
+ids, embeddings = media.export_vectors("text_openai", where="views > 1000")
 # embeddings: np.ndarray of shape (len(ids), 1536), float32
+
+# DB-level collection management
+db.list_collections()            # ["media", "notes"]
+db.has_collection("media")       # True
+db.drop_collection("notes")      # deletes the Lance table + registry entry
 ```
 
 ## Filter syntax
@@ -110,15 +119,21 @@ to change metrics.
 ## Architecture
 
 ```
-ObjectVectorDB                 ── public API, Python-native types only
+ObjectVectorDB             ── DB handle: open URI, create/list/drop collections
     │
-    ├── SchemaRegistry      ── JSON sidecar at <uri>/object_vectordb_registry.json
-    └── LanceDBBackend      ── all lancedb / pyarrow code
+    └── Collection         ── per-collection API (add, get, search, …)
+            │
+            ├── SchemaRegistry   ── JSON sidecar, namespaced by collection
+            └── LanceDBBackend   ── all lancedb / pyarrow code
 ```
 
-Swapping backends (e.g. to Qdrant) means writing a new backend class with the same
-method signatures and replacing the import in `db.py`. There is no formal plugin
-system — just a single concrete backend today and disciplined layering.
+Collections are the unit of schema isolation: each collection owns its own vector
+fields, property schema, and LanceDB table. Two collections at the same URI can
+register the same field name with different dimensionalities without colliding.
+
+Swapping backends (e.g. to Qdrant) means writing a new class with the same
+`LanceDBBackend` method signatures and changing one import. There is no formal
+plugin system — just disciplined layering.
 
 ## Concurrency
 

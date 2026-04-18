@@ -1,8 +1,38 @@
 # Core Concepts
 
 This page explains the mental model the API is built around. Reading it should
-take five minutes and leave you with a clear understanding of what an
-"object," a "property," and a "vector" mean in this library.
+take five minutes and leave you with a clear understanding of what a
+"collection," an "object," a "property," and a "vector" mean in this library.
+
+## Database and collections
+
+The top-level handle is `ObjectVectorDB(uri)`. It does not hold any objects
+itself — it's a reference to a directory where one or more **collections**
+live:
+
+```python
+from object_vectordb import ObjectVectorDB
+
+db = ObjectVectorDB(uri="data/my_store")
+videos = db.collection("videos")          # opens or creates
+images = db.collection("images")          # sibling collection; isolated schema
+```
+
+A collection is a named group of objects with its own vector-field registry,
+its own property schema, and its own underlying LanceDB table. Collections
+at the same URI never share state: a vector field registered on `videos` is
+invisible to `images`, and the same field name can exist at different
+dimensionalities in each collection.
+
+All per-object operations (`add`, `get`, `search`, `register_vector_field`,
+`create_index`, …) live on the collection. DB-level operations are limited
+to:
+
+```python
+db.list_collections()        # ["images", "videos"]
+db.has_collection("videos")  # True
+db.drop_collection("images") # deletes the underlying Lance table + registry entry
+```
 
 ## Object
 
@@ -25,7 +55,7 @@ classic ambiguity: a property that happens to be a list of floats is never
 mistaken for a vector.
 
 ```python
-store.add(
+videos.add(
     "video_001",
     properties={"title": "A cat playing piano", "views": 42},
     vectors={"text_openai": [0.12, 0.08, ...],  # dim=1536
@@ -36,11 +66,11 @@ store.add(
 ## Why register vector fields?
 
 Before writing vectors of a new type, the caller **registers** the vector
-field, declaring its name and dimensionality:
+field on the collection, declaring its name and dimensionality:
 
 ```python
-store.register_vector_field("text_openai", dim=1536,
-                            description="text-embedding-3-small on title")
+videos.register_vector_field("text_openai", dim=1536,
+                             description="text-embedding-3-small on title")
 ```
 
 This is a schema-level operation (zero-copy in LanceDB — no data rewrite).
@@ -57,9 +87,10 @@ Registration serves two purposes:
    was added and *by whom*. An explicit registration call provides a clear
    code point to trace.
 
-For prototyping, `ObjectVectorDB(..., auto_register=True)` infers a vector
-field's dimensionality from the first value written under that name. Explicit
-registration is recommended for production use.
+For prototyping, pass `auto_register=True` when opening a collection
+(`db.collection("name", auto_register=True)`); the first vector written
+under a previously-unseen name is implicitly registered with
+`dim=len(vector)`. Explicit registration is recommended for production use.
 
 ### Properties and vectors are independent
 

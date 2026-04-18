@@ -23,6 +23,7 @@ tests/
 ├── test_vector_fields.py     # register, dim enforcement, drop, rename, reserved-prefix
 ├── test_schema.py            # schema() shape, auto-add per Python type
 ├── test_search.py            # per-metric calibration, where, select, metric mismatch
+├── test_collections.py       # collection CRUD + schema isolation across collections
 ├── test_rrf.py               # rrf_merge determinism, k parameter, limit, tie-breaking
 ├── test_index.py             # create / rebuild / drop / index_info round-trip
 ├── test_export.py            # export_vectors aligned shapes, null skipping, where filter
@@ -57,8 +58,12 @@ has changed:
 ```python
 @pytest.fixture
 def store(tmp_path):
-    return ObjectVectorDB(uri=str(tmp_path / "db"), table_name="objects")
+    db = ObjectVectorDB(uri=str(tmp_path / "db"))
+    return db.collection("objects")
 ```
+
+A second fixture `db` yields the raw `ObjectVectorDB` handle, for tests
+that need multi-collection access.
 
 Every test gets its own temp directory, so stores are fully isolated. No
 shared state, no test ordering dependencies.

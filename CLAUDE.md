@@ -25,19 +25,24 @@ CI (`.github/workflows/ci.yml`) runs lint, a pytest matrix over Python 3.10/3.11
 ## Architecture — the layering rule
 
 ```
-ObjectVectorDB  (src/object_vectordb/db.py)      ← public API, Python-native types only
+ObjectVectorDB    (db.py)            ← DB handle: open URI, create/list/drop collections
     │
-    ├── SchemaRegistry  (registry.py)          ← JSON sidecar metadata
-    └── LanceDBBackend  (backend.py)           ← all lancedb + pyarrow code
+    └── Collection  (collection.py)  ← per-collection API: add, get, search, register_vector_field…
+            │
+            ├── SchemaRegistry       ← JSON sidecar, scoped per-collection via CollectionRegistry
+            └── LanceDBBackend       ← all lancedb + pyarrow code; one backend per Collection
 ```
 
-**Hard rule: `db.py` must not import `lancedb` or `pyarrow`.** Every storage-engine specific call lives in `backend.py`. Swapping backends (hypothetically to Qdrant or Milvus) should be a single-file change. Violating this is the main thing to reject in PRs.
+- **Collections** are the unit of schema isolation: each collection owns its own vector fields, property columns, and LanceDB table. Collections at the same URI never share state.
+- `rrf_merge` is a module-level function in `fusion.py`, not a method on any class — it's a pure utility over `SearchResult` lists.
+
+**Hard rule: `db.py` and `collection.py` must not import `pyarrow`, and only `db.py` may import `lancedb` (for the initial `connect`).** Every storage-engine specific call lives in `backend.py`. Swapping backends should be a single-file change.
 
 ## Architecture — big picture
 
 **Properties vs. vectors are separate namespaces.** The API takes them as distinct arguments. Internally, vector columns are prefixed `__vec_<name>`; property names are rejected if they start with that prefix. Property names otherwise are stored as-is.
 
-**Vector fields must be registered before use.** `register_vector_field(name, dim)` adds a zero-copy `FixedSizeList<float32, dim>` column via LanceDB's `table.add_columns(pa.field(...))`. Registration is tracked in a JSON sidecar at `<uri>/object_vectordb_registry.json` — NOT inside the Lance table. The registry is the source of truth for which columns are vectors vs. properties, each vector's dim, and each vector's index config.
+**Vector fields must be registered before use, per collection.** `collection.register_vector_field(name, dim)` adds a zero-copy `FixedSizeList<float32, dim>` column via LanceDB's `table.add_columns(pa.field(...))`. Registration is tracked in a JSON sidecar at `<uri>/object_vectordb_registry.json`, namespaced by collection name — NOT inside the Lance table. The registry is the source of truth for which collections exist, which columns are vectors vs. properties within each collection, each vector's dim, and each vector's index config.
 
 **Schema grows automatically for properties.** Property columns are added on first write via Arrow-type inference from the sample value (`arrow_utils.python_value_to_arrow_type`). `None` alone cannot be inferred and raises `SchemaError`.
 

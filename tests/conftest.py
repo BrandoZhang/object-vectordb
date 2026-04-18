@@ -7,17 +7,17 @@ from object_vectordb import ObjectVectorDB
 
 @pytest.fixture
 def store(tmp_path):
-    return ObjectVectorDB(uri=str(tmp_path / "db"), table_name="objects")
+    """A default Collection at a fresh tmp URI.
+
+    Named `store` for historical reasons — it's a `Collection`, not the
+    `ObjectVectorDB` handle. All per-object operations (add, get, search,
+    register_vector_field, etc.) live on this fixture.
+    """
+    db = ObjectVectorDB(uri=str(tmp_path / "db"))
+    return db.collection("objects")
 
 
 @pytest.fixture
-def store_factory(tmp_path):
-    """Factory that yields stores pointing at the same uri (for reopen tests)."""
-    counter = {"n": 0}
-    uri = str(tmp_path / "shared")
-
-    def make(table_name: str = "objects", **kw) -> ObjectVectorDB:
-        counter["n"] += 1
-        return ObjectVectorDB(uri=uri, table_name=table_name, **kw)
-
-    return make
+def db(tmp_path):
+    """A fresh `ObjectVectorDB` handle. Use when the test needs multi-collection access."""
+    return ObjectVectorDB(uri=str(tmp_path / "db"))

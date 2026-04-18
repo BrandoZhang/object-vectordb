@@ -7,13 +7,13 @@ vectors per object.
 
 ## Reading order
 
-1. **[concepts.md](concepts.md)** — the core mental model: objects, properties,
-   vectors, and why vector fields are explicitly registered.
+1. **[concepts.md](concepts.md)** — the core mental model: collections, objects,
+   properties, vectors, and why vector fields are explicitly registered.
 2. **[architecture.md](architecture.md)** — the technical design: module layout,
    the registry, LanceDB API usage, column naming, schema evolution, score
    conversion, null-clearing strategy, concurrency.
 3. **[api.md](api.md)** — full reference for every public method on
-   `ObjectVectorDB`, every dataclass, and every exception.
+   `ObjectVectorDB` and `Collection`, every dataclass, and every exception.
 4. **[filters.md](filters.md)** — the `where` filter syntax (DataFusion SQL)
    with practical examples.
 5. **[testing.md](testing.md)** — what the test suite covers and how to run
@@ -21,9 +21,9 @@ vectors per object.
 
 ## Quick links
 
-- [API: `ObjectVectorDB.add`](api.md#add)
-- [API: `ObjectVectorDB.update`](api.md#update)
-- [API: `ObjectVectorDB.search`](api.md#search)
+- [API: `ObjectVectorDB.collection`](api.md#collection)
+- [API: `Collection.add`](api.md#add)
+- [API: `Collection.search`](api.md#search)
+- [API: `rrf_merge`](api.md#module-level-rrf_merge)
 - [Architecture: score conversion](architecture.md#score-conversion)
-- [Architecture: null-clearing](architecture.md#null-clearing)
-- [Concepts: why register vector fields?](concepts.md#why-register-vector-fields)
+- [Concepts: database and collections](concepts.md#database-and-collections)

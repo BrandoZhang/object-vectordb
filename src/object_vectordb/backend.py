@@ -12,7 +12,6 @@ import logging
 from collections.abc import Iterable
 from typing import Any
 
-import lancedb
 import numpy as np
 import pyarrow as pa
 
@@ -29,7 +28,7 @@ from .exceptions import (
     SchemaError,
     VectorFieldNotRegistered,
 )
-from .registry import VECTOR_COLUMN_PREFIX, SchemaRegistry, VectorFieldRecord
+from .registry import VECTOR_COLUMN_PREFIX, CollectionRegistry, VectorFieldRecord
 from .scoring import distance_to_score, normalize_metric
 from .types import IndexInfo, SearchResult, VectorFieldInfo
 
@@ -45,20 +44,19 @@ def _quote_literal(value: str) -> str:
 
 
 class LanceDBBackend:
-    """All LanceDB-specific operations. Instantiated once per `ObjectVectorDB`."""
+    """All LanceDB-specific operations. One backend instance per Collection."""
 
     def __init__(
         self,
-        uri: str,
+        db,
         table_name: str,
-        registry: SchemaRegistry,
+        registry: CollectionRegistry,
         auto_register: bool = False,
     ):
-        self._uri = uri
+        self._db = db
         self._table_name = table_name
         self._registry = registry
         self._auto_register = auto_register
-        self._db = lancedb.connect(uri)
         self._table = self._ensure_table()
 
     # ------------------------------------------------------------------

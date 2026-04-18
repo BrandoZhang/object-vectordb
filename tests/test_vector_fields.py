@@ -45,7 +45,8 @@ def test_write_without_register_raises(store):
 
 
 def test_auto_register(tmp_path):
-    s = ObjectVectorDB(uri=str(tmp_path / "db"), auto_register=True)
+    db = ObjectVectorDB(uri=str(tmp_path / "db"))
+    s = db.collection("default", auto_register=True)
     s.add("x", vectors={"clip": [1.0, 2.0, 3.0]})
     fields = {v.name: v.dim for v in s.vector_fields()}
     assert fields == {"clip": 3}

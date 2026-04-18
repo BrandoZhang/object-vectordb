@@ -4,7 +4,7 @@ All public names are re-exported from the top-level `object_vectordb` package.
 
 ```python
 from object_vectordb import (
-    ObjectVectorDB,
+    ObjectVectorDB, Collection, rrf_merge,
     ObjectData, ObjectUpdate, SearchResult, VectorFieldInfo, IndexInfo,
     ObjectVectorDBError,
     ObjectNotFound, DuplicateObject, VectorFieldNotRegistered,
@@ -15,25 +15,76 @@ from object_vectordb import (
 The API deliberately uses only Python-native types (`str`, `int`, `float`,
 `list`, `dict`, `numpy.ndarray`). No `lancedb` or `pyarrow` types leak out.
 
-## Class: `ObjectVectorDB`
+## Class: `ObjectVectorDB` (DB handle)
 
 ### Constructor
 
 ```python
-ObjectVectorDB(uri: str, table_name: str = "objects", auto_register: bool = False)
+ObjectVectorDB(uri: str)
 ```
 
 - `uri` — local directory path or a cloud URI (`s3://...`) that LanceDB can
   open. The schema registry JSON sidecar is written inside this directory.
-- `table_name` — name of the Lance table; created if missing.
-- `auto_register` — if `True`, writing a vector under a previously-unseen
-  name automatically registers it with `dim = len(vector)`. Default `False`
-  for production safety.
 
-Construction is cheap: it opens (or creates) the Lance table and reads the
-registry JSON sidecar.
+Construction is cheap: it opens the LanceDB directory and reads the registry
+sidecar. No collections are created; call `collection()` to open/create one.
 
 ---
+
+### `collection`
+
+```python
+collection(name: str, auto_register: bool = False) -> Collection
+```
+
+Open or create a named collection. If the underlying Lance table doesn't
+exist, it's created with just the `object_id` column; vector and property
+columns are added later via `register_vector_field` and the first write.
+
+- `auto_register` — per-call flag (not persisted). When `True`, writing a
+  vector under a previously-unseen name on the returned collection
+  implicitly registers it with `dim = len(vector)`. Default `False`.
+- Raises `ValueError` if `name` is empty.
+
+---
+
+### `list_collections`
+
+```python
+list_collections() -> list[str]
+```
+
+Collection names registered at this URI, intersected with the Lance tables
+actually present on disk. Sorted alphabetically.
+
+---
+
+### `has_collection`
+
+```python
+has_collection(name: str) -> bool
+```
+
+`True` iff the Lance table and the registry entry both exist.
+
+---
+
+### `drop_collection`
+
+```python
+drop_collection(name: str) -> None
+```
+
+Delete the Lance table and its registry entry. Silent no-op if the
+collection doesn't exist.
+
+---
+
+## Class: `Collection` (per-collection API)
+
+Obtained from `ObjectVectorDB.collection(name)`. All per-object operations
+live here. Each collection owns its own vector-field registry, property
+columns, and Lance table.
 
 ### `register_vector_field`
 
@@ -253,21 +304,29 @@ Raises:
 
 ---
 
-### `rrf_merge` (static method)
+---
+
+## Module-level: `rrf_merge`
 
 ```python
-ObjectVectorDB.rrf_merge(
+from object_vectordb import rrf_merge
+
+rrf_merge(
     *result_lists: list[SearchResult],
     k: int = 60,
     limit: int | None = None,
 ) -> list[SearchResult]
 ```
 
-Reciprocal Rank Fusion. Combines multiple `SearchResult` lists into one
-fused ranking. Object properties on the returned list come from the first
-occurrence of each id. See
+Reciprocal Rank Fusion. Pure-Python utility that combines multiple
+`SearchResult` lists (e.g. one from a text-vector search, another from an
+image-vector search) into one fused ranking. Object properties on the
+returned list come from the first occurrence of each id. See
 [architecture.md § RRF](architecture.md#rrf-reciprocal-rank-fusion) for
 the formula.
+
+Not a method on any class — takes `SearchResult` lists and returns a new
+`SearchResult` list; no backend involvement.
 
 ---
 
