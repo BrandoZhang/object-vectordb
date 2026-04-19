@@ -1,7 +1,9 @@
 # Technical Design
 
 This page explains *how* the library is implemented. It assumes you have
-read [concepts.md](concepts.md).
+read [concepts.md](concepts.md). For *why* LanceDB is the backend (and how
+this library compares to other vector DBs and abstraction layers), see
+[comparison.md](comparison.md).
 
 ## Module layout
 

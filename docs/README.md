@@ -9,14 +9,17 @@ vectors per object.
 
 1. **[concepts.md](concepts.md)** — the core mental model: collections, objects,
    properties, vectors, and why vector fields are explicitly registered.
-2. **[architecture.md](architecture.md)** — the technical design: module layout,
+2. **[comparison.md](comparison.md)** — how this library and LanceDB compare
+   to Weaviate, Qdrant, Milvus, Chroma, pgvector, Pinecone, Vespa, and the
+   existing abstraction layers (LangChain, LlamaIndex, Haystack, FiftyOne).
+3. **[architecture.md](architecture.md)** — the technical design: module layout,
    the registry, LanceDB API usage, column naming, schema evolution, score
    conversion, null-clearing strategy, concurrency.
-3. **[api.md](api.md)** — full reference for every public method on
+4. **[api.md](api.md)** — full reference for every public method on
    `ObjectVectorDB` and `Collection`, every dataclass, and every exception.
-4. **[filters.md](filters.md)** — the `where` filter syntax (DataFusion SQL)
+5. **[filters.md](filters.md)** — the `where` filter syntax (DataFusion SQL)
    with practical examples.
-5. **[testing.md](testing.md)** — what the test suite covers and how to run
+6. **[testing.md](testing.md)** — what the test suite covers and how to run
    it.
 
 ## Quick links
