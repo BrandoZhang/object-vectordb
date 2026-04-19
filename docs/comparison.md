@@ -87,12 +87,12 @@ earns its keep.
   ([vespa.ai](https://vespa.ai))
 - **VikingDB** — Proprietary SaaS (ByteDance / Volcano Engine, also
   surfaced via BytePlus). Managed vector service. Based on the public
-  Python SDK and English docs, the data model is **single vector per
-  record** with scalar-field filtering and text + vector hybrid search;
+  Python SDK and docs, the data model is **single vector per record**
+  with scalar-field filtering and text + vector hybrid search;
   multi-named-vectors-per-record and server-side cross-vector RRF are not
   documented. Storage is hosted on ByteDance TOS rather than arbitrary S3.
-  China-region-first; international availability varies. If newer versions
-  have added multi-vector support, public docs don't show it yet.
+  If newer versions have added multi-vector support, public docs don't
+  show it yet.
   ([github.com/volcengine/vikingdb-python-sdk](https://github.com/volcengine/vikingdb-python-sdk),
   [docs.byteplus.com/en/docs/VikingDB](https://docs.byteplus.com/en/docs/VikingDB/Overview))
 
@@ -121,7 +121,7 @@ commercial; text-first), *Marqo* (Apache-2.0 on OpenSearch), *Redis Vector*
 | Embedded Python (no server) | ✓ | ✗ | partial (in-memory) | ✗ | ✓ | partial (w/ Postgres) | ✓ | ✗ | ✗ | ✗ |
 | S3 / object-store native | ✓ | ✗ | ✗ | partial (MinIO) | ✗ | ✗ | ✗ | n/a (SaaS) | ✗ | partial (TOS, ByteDance-hosted) |
 | BM25 + vector hybrid | partial (FTS experimental) | ✓ | partial | ✓ | ✗ | partial (tsvector) | ✗ | partial | ✓ | ✓ |
-| Managed / SaaS | ✓ (LanceDB Cloud) | ✓ | ✓ | ✓ (Zilliz) | ✓ | ✓ (RDS et al.) | ✗ | ✓ | ✓ | ✓ (China-first) |
+| Managed / SaaS | ✓ (LanceDB Cloud) | ✓ | ✓ | ✓ (Zilliz) | ✓ | ✓ (RDS et al.) | ✗ | ✓ | ✓ | ✓ |
 
 Reading the tables: a ✗ on a hard-requirement row is disqualifying. A ✗ on a
 nice-to-have row is not.
