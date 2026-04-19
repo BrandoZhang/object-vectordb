@@ -317,8 +317,15 @@ class LanceDBBackend:
         null_scalar_ops: list[tuple[str, str]] = []  # (object_id, property_name)
         null_vector_ops: list[tuple[str, str]] = []  # (object_id, vector_name)
 
+        seen: set[str] = set()
         for upd in updates:
             object_id = upd["object_id"]
+            # LanceDB's merge_insert against multiple source rows sharing a key is
+            # implementation-defined, and splitting rows across signature groups
+            # makes apply-order unreliable. Match add_many's behavior and reject.
+            if object_id in seen:
+                raise DuplicateObject(object_id)
+            seen.add(object_id)
             if not self.exists(object_id):
                 raise ObjectNotFound(object_id)
             properties = upd.get("properties") or {}

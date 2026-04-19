@@ -214,6 +214,12 @@ non-None value first, then you can subsequently clear that column.
   `alter_columns` renames the column in the schema but does not update the
   index's column reference. `rename_field()` therefore drops the index,
   renames, then recreates the index using the stored config.
+- **`batch_update` rejects duplicate ids inside a single batch.** LanceDB's
+  `merge_insert` against multiple source rows that share a key is
+  implementation-defined, and our column-signature grouping would split such
+  rows into separate groups with unreliable apply-order. `batch_update`
+  therefore raises `DuplicateObject` on an intra-batch duplicate, mirroring
+  `add_many`'s behavior.
 
 ## Score conversion
 
@@ -316,3 +322,44 @@ Single-writer only. The JSON sidecar is not locked. Concurrent readers are
 safe: LanceDB supports concurrent reads on a table, and the registry is
 re-read on every ObjectVectorDB construction. For multi-writer, route writes
 through a queue consumer running in a single process.
+
+### Side effects under the single-writer contract
+
+These are consequences of the single-writer assumption that a caller should
+know about before violating it:
+
+- **TOCTOU on `add()` / `update()` pre-checks.** `add()` does
+  `count_rows → merge_insert.when_not_matched_insert_all`; `update()` and
+  `batch_update()` do `exists → merge_insert`. A concurrent writer between
+  the check and the merge_insert can cause:
+  - Two `add()` calls with the same id: the loser's `when_not_matched_insert_all`
+    silently no-ops — **no error is raised**, the caller believes the write
+    succeeded.
+  - Concurrent `delete` racing an `update()`: the `update()` path includes
+    `when_not_matched_insert_all()` (so it can act as an upsert in isolation),
+    which means a just-deleted row is **silently re-inserted as a partial row**
+    containing only the columns the update touched; every other column is
+    null. `batch_update` has the same property. This is pinned by
+    `tests/test_update.py::test_update_after_concurrent_delete_resurrects_partial_row`.
+- **Registry sidecar.** Two processes calling `register_vector_field` or
+  writing schema concurrently can lose one update: each reads the JSON, each
+  writes its own modified copy via `os.replace`. The Lance columns exist, but
+  the registry forgets them — subsequent opens see a "property column
+  starting with `__vec_`" state that property-name validation rejects.
+- **`batch_update` is not atomic across groups.** Rows are split into
+  column-signature groups, each executed as its own `merge_insert`, followed
+  by per-row null-clears. If the process crashes mid-batch, the batch is
+  partially applied. Callers that need atomicity should either keep batches
+  small enough to recover by re-running or integrate with LanceDB's
+  versioning (`table.checkout_latest` / restore).
+- **Search sees an indexed delta.** Vectors added or updated after an IVF
+  index was built are searched via LanceDB's unindexed-delta path until the
+  next `optimize()` / index refresh. Results are correct, but latency and
+  recall can shift once the delta grows. Call `Collection.optimize()`
+  periodically after large ingests.
+- **`register_vector_field` dim-mismatch recovery.** Registering with a
+  different `dim` after the first registration raises `DimensionMismatch`.
+  If the first registration used the wrong dimension and rows already
+  reference it, the only recovery is `drop_fields([name])` followed by
+  `register_vector_field(name, correct_dim)` and re-ingest. The registry
+  is the source of truth for `dim`; it cannot be changed in place.

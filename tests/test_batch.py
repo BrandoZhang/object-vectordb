@@ -76,6 +76,19 @@ def test_batch_update_on_missing_id_raises(store):
         store.batch_update([ObjectUpdate(object_id="ghost", properties={"n": 2})])
 
 
+def test_batch_update_rejects_duplicate_in_batch(store):
+    store.add("a", properties={"n": 1})
+    with pytest.raises(DuplicateObject):
+        store.batch_update(
+            [
+                ObjectUpdate(object_id="a", properties={"n": 2}),
+                ObjectUpdate(object_id="a", properties={"n": 3}),
+            ]
+        )
+    # Nothing from the rejected batch should have landed.
+    assert store.get("a").properties["n"] == 1
+
+
 def test_batch_update_large(store):
     store.register_vector_field("v", dim=3)
     for i in range(100):

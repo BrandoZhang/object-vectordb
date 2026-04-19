@@ -74,3 +74,36 @@ def test_update_preserves_other_rows(store):
     assert store.get("x1").properties["title"] == "A"
     assert store.get("x2").properties["title"] == "b"
     assert store.get("x2").vectors["v"] == pytest.approx([0.0, 1.0])
+
+
+def test_update_after_concurrent_delete_resurrects_partial_row(store, monkeypatch):
+    # Regression test pinning the single-writer trade-off documented in
+    # docs/architecture.md. update() checks exists() then issues a merge_insert
+    # with when_not_matched_insert_all(); if a concurrent writer deletes the
+    # row in between, the merge_insert silently inserts a partial row whose
+    # untouched columns are null. We don't defend against this (single-writer
+    # contract), but we pin the behavior so we notice if LanceDB changes it.
+    store.add("x", properties={"title": "a", "tag": "keep"})
+
+    backend = store._backend
+    real_exists = backend.exists
+    calls = {"n": 0}
+
+    def racing_exists(object_id: str) -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            assert real_exists(object_id)
+            backend._table.delete(f"object_id = '{object_id}'")
+            return True
+        return real_exists(object_id)
+
+    monkeypatch.setattr(backend, "exists", racing_exists)
+
+    store.update("x", properties={"title": "B"})
+
+    obj = store.get("x")
+    assert obj is not None
+    assert obj.properties["title"] == "B"
+    # The column the update didn't touch is now null because the partial
+    # row was inserted fresh, not merged into the (deleted) original.
+    assert obj.properties.get("tag") is None
