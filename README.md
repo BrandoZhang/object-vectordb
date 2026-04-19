@@ -135,6 +135,11 @@ Swapping backends (e.g. to Qdrant) means writing a new class with the same
 `LanceDBBackend` method signatures and changing one import. There is no formal
 plugin system — just disciplined layering.
 
+For the backend rationale (why LanceDB over Weaviate, Qdrant, Milvus, Chroma,
+pgvector, Pinecone, Vespa) and how this library compares to LangChain
+VectorStores / LlamaIndex / Haystack / FiftyOne, see
+[docs/comparison.md](docs/comparison.md).
+
 ## Performance
 
 Observed quick-tier benchmarks (`uv run pytest benches/ --benchmark-only -m "not full"`).
@@ -195,6 +200,8 @@ MIT (or project default).
 Deeper documentation lives in [`docs/`](docs/README.md):
 
 - [Concepts](docs/concepts.md) — the mental model (objects, properties, vectors, registration).
+- [Comparison](docs/comparison.md) — why LanceDB, how this library compares
+  to other vector DBs and abstraction layers.
 - [Architecture](docs/architecture.md) — module layout, LanceDB usage, score
   conversion, null-clearing, concurrency.
 - [API reference](docs/api.md) — full signature and behavior for every public
