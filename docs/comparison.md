@@ -85,13 +85,16 @@ earns its keep.
 - **Vespa** — Apache-2.0. JVM. Production search engine with first-class
   tensor/vector fields and rank profiles. Heavy to operate.
   ([vespa.ai](https://vespa.ai))
-- **VikingDB** — Proprietary SaaS (ByteDance / Volcano Engine). Managed
-  service with multi-vector-per-doc, scalar filtering, and hybrid (vector +
-  text) search. Schema is declared up front. Storage is hosted on ByteDance
-  TOS rather than arbitrary S3. China-region-first; international
-  availability varies. English docs are thinner than the Chinese ones, so
-  some cells below are flagged as uncertain.
-  ([volcengine.com/product/vikingdb](https://www.volcengine.com/product/vikingdb))
+- **VikingDB** — Proprietary SaaS (ByteDance / Volcano Engine, also
+  surfaced via BytePlus). Managed vector service. Based on the public
+  Python SDK and English docs, the data model is **single vector per
+  record** with scalar-field filtering and text + vector hybrid search;
+  multi-named-vectors-per-record and server-side cross-vector RRF are not
+  documented. Storage is hosted on ByteDance TOS rather than arbitrary S3.
+  China-region-first; international availability varies. If newer versions
+  have added multi-vector support, public docs don't show it yet.
+  ([github.com/volcengine/vikingdb-python-sdk](https://github.com/volcengine/vikingdb-python-sdk),
+  [docs.byteplus.com/en/docs/VikingDB](https://docs.byteplus.com/en/docs/VikingDB/Overview))
 
 **Honorable mentions.** *Turbopuffer* (proprietary; object-store-native,
 serverless — architectural reference to watch), *Typesense* (GPL-3.0 +
@@ -104,9 +107,9 @@ commercial; text-first), *Marqo* (Apache-2.0 on OpenSearch), *Redis Vector*
 
 | Requirement | LanceDB | Weaviate | Qdrant | Milvus | Chroma | pgvector | FAISS | Pinecone | Vespa | VikingDB |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Multiple named vectors per object | ✓ (N FSL columns) | ✓ (v1.24+) | ✓ (named vectors) | ✓ (v2.4+, up to 10) | ✗ (one per record) | partial (schema-by-hand) | ✗ (no metadata) | ✗ (one vector per record) | ✓ (tensor fields) | ✓ (multi-vector fields per doc) |
-| Multimodality on one object | ✓ (siblings on row) | ✓ | ✓ | ✓ | ✗ | partial (join) | ✗ | ✗ | ✓ | ✓ |
-| Vector-fusion search (RRF et al.) | partial (client-side `rrf_merge`) | ✓ (hybrid+RRF) | partial (client) | ✓ (server-side RRF + weighted) | ✗ | ✗ | ✗ | partial (SaaS features) | ✓ (rank profiles) | ✓ (server-side hybrid, incl. RRF-style) |
+| Multiple named vectors per object | ✓ (N FSL columns) | ✓ (v1.24+) | ✓ (named vectors) | ✓ (v2.4+, up to 10) | ✗ (one per record) | partial (schema-by-hand) | ✗ (no metadata) | ✗ (one vector per record) | ✓ (tensor fields) | ✗ (one vector per record per public docs) |
+| Multimodality on one object | ✓ (siblings on row) | ✓ | ✓ | ✓ | ✗ | partial (join) | ✗ | ✗ | ✓ | ✗ (parallel collections only) |
+| Vector-fusion search (RRF et al.) | partial (client-side `rrf_merge`) | ✓ (hybrid+RRF) | partial (client) | ✓ (server-side RRF + weighted) | ✗ | ✗ | ✗ | partial (SaaS features) | ✓ (rank profiles) | partial (text + vector hybrid only; no multi-vector fusion documented) |
 | Dynamic property schema | ✓ (auto-add) | ✓ | ✓ | partial (schema-declared) | partial (metadata dict) | ✗ (DDL) | ✗ | ✓ (metadata dict) | ✗ (schema-declared) | ✗ (schema-declared) |
 | Zero-copy schema evolution | ✓ (Lance metadata) | partial | partial | partial | partial | ✗ (ALTER TABLE rewrite risk) | ✗ | partial | partial | unknown (not documented publicly) |
 | Permissive OSS (Apache-2.0 / MIT / BSD) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✗ (proprietary SaaS) |
