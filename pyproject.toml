@@ -16,6 +16,11 @@ dev = [
     "pytest-benchmark>=5.0",
     "ruff>=0.6",
 ]
+spotlight = [
+    "renumics-spotlight>=1.6",
+    "sentence-transformers>=2.7",
+    "pandas>=2.0",
+]
 
 [build-system]
 requires = ["hatchling"]
