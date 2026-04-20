@@ -264,28 +264,36 @@ store.update("x", vectors={"image_clip": None})
   3. Build a single-row pyarrow Table with exactly the touched columns.
   4. `merge_insert("object_id").when_not_matched_insert_all().execute(batch)`.
 
-- `update(object_id, properties?, vectors?)`
-  1. Pre-check existence → `ObjectNotFound` if missing.
+- `update(object_id, properties?, vectors?, on_missing="raise")`
+  1. If `on_missing != "insert"`: pre-check existence; on missing, raise
+     `ObjectNotFound` (`"raise"`) or silently return (`"skip"`).
   2. Separate None values (clears) from non-None writes.
   3. If any writes: build a one-row batch with only the touched columns and
-     do `merge_insert.when_matched_update_all()`. Because the batch only
-     contains the touched columns, `when_matched_update_all()` leaves all
-     other columns untouched.
+     run `merge_insert.when_matched_update_all()`. With `on_missing="insert"`
+     the merge also adds `when_not_matched_insert_all()` (upsert). Because
+     the batch only contains the touched columns, `when_matched_update_all()`
+     leaves all other columns untouched.
   4. For each None clear: issue `values_sql` (scalars) or `merge_insert`
-     with null-vector batch (vectors).
+     with null-vector batch (vectors). Null-clears use update-only
+     merge_insert and silently no-op on missing rows.
 
-- `batch_update([ObjectUpdate, ...])`
-  1. Pre-check existence for every id.
-  2. Collect non-None writes into rows; collect None clears separately.
-  3. **Group rows by column signature.** Within a group, every row touches
+- `batch_update([ObjectUpdate, ...], on_missing="raise")`
+  1. Reject duplicate `object_id`s inside the batch (`DuplicateObject`).
+  2. If `on_missing != "insert"`: pre-check existence per id; on missing,
+     either raise `ObjectNotFound` or drop the row from the batch
+     (`"skip"`).
+  3. Collect non-None writes into rows; collect None clears separately.
+  4. **Group rows by column signature.** Within a group, every row touches
      the same column set, so `when_matched_update_all()` preserves every
      other column for every row. Without grouping, a row that specifies
      only `{"n": 1}` would land in a batch whose schema also includes `v`
      (because a sibling row set `v`), with `v=None` — and
      `when_matched_update_all()` would null-out the original `v` for that
      row. Grouping avoids that failure mode.
-  4. For each group: one `merge_insert` call.
-  5. Issue per-row clears as above.
+  5. For each group: one `merge_insert` call. With `on_missing="insert"`,
+     the call adds `when_not_matched_insert_all()` so missing rows become
+     partial inserts.
+  6. Issue per-row clears as above.
 
 ## Search path
 
@@ -335,12 +343,16 @@ know about before violating it:
   - Two `add()` calls with the same id: the loser's `when_not_matched_insert_all`
     silently no-ops — **no error is raised**, the caller believes the write
     succeeded.
-  - Concurrent `delete` racing an `update()`: the `update()` path includes
-    `when_not_matched_insert_all()` (so it can act as an upsert in isolation),
-    which means a just-deleted row is **silently re-inserted as a partial row**
-    containing only the columns the update touched; every other column is
-    null. `batch_update` has the same property. This is pinned by
-    `tests/test_update.py::test_update_after_concurrent_delete_resurrects_partial_row`.
+  - Concurrent `delete` racing an `update()` with the default
+    `on_missing="raise"`: the merge_insert is update-only, so it silently
+    no-ops and the row stays deleted. The caller sees `update()` return
+    successfully even though no row was written. `batch_update` is the
+    same. Pass `on_missing="insert"` if you want the upsert behavior
+    instead — that path **silently re-inserts a partial row** containing
+    only the columns the update touched; every other column is null. Both
+    behaviors are pinned by tests in `tests/test_update.py`
+    (`test_update_default_silently_noops_when_concurrently_deleted` and
+    `test_update_on_missing_insert_resurrects_partial_row`).
 - **Registry sidecar.** Two processes calling `register_vector_field` or
   writing schema concurrently can lose one update: each reads the JSON, each
   writes its own modified copy via `os.replace`. The Lance columns exist, but

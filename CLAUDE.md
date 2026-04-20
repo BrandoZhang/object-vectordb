@@ -49,7 +49,7 @@ ObjectVectorDB    (db.py)            ← DB handle: open URI, create/list/drop c
 
 **Schema grows automatically for properties.** Property columns are added on first write via Arrow-type inference from the sample value (`arrow_utils.python_value_to_arrow_type`). `None` alone cannot be inferred and raises `SchemaError`.
 
-**Merge-update semantics.** `update()` and `batch_update()` only touch fields the caller passes. `None` clears a field on a specific object (the column stays, the cell becomes null).
+**Merge-update semantics.** `update()` and `batch_update()` only touch fields the caller passes. `None` clears a field on a specific object (the column stays, the cell becomes null). Both methods take `on_missing: Literal["raise", "insert", "skip"] = "raise"` controlling behavior when the target id is absent: default raises `ObjectNotFound` and runs an update-only merge_insert (so a concurrent delete causes a silent no-op, not a partial re-insert); `"insert"` opts into upsert (partial re-insert allowed); `"skip"` silently no-ops on missing ids.
 
 ## Non-obvious LanceDB behaviors we encode
 

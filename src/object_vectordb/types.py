@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+OnMissing = Literal["raise", "insert", "skip"]
+"""Behavior of `update()` / `batch_update()` when the target object_id does not exist.
+
+- "raise" (default): pre-check existence and raise `ObjectNotFound`. The merge_insert
+  is configured to update-only (no `when_not_matched_insert_all`), so a row deleted
+  by a concurrent writer between the pre-check and the merge becomes a silent no-op
+  rather than a partial-row resurrection.
+- "insert": skip the existence pre-check and run the merge as an upsert. If the row
+  is missing, a partial row containing only the touched columns is inserted.
+- "skip": pre-check existence and silently no-op (return without writing) for any
+  missing id. Useful for best-effort batch updates over a snapshot of ids.
+"""
 
 
 @dataclass

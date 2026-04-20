@@ -30,7 +30,15 @@ from .exceptions import (
 )
 from .registry import VECTOR_COLUMN_PREFIX, CollectionRegistry, VectorFieldRecord
 from .scoring import distance_to_score, normalize_metric
-from .types import IndexInfo, SearchResult, VectorFieldInfo
+from .types import IndexInfo, OnMissing, SearchResult, VectorFieldInfo
+
+_VALID_ON_MISSING: frozenset[str] = frozenset({"raise", "insert", "skip"})
+
+
+def _validate_on_missing(value: str) -> None:
+    if value not in _VALID_ON_MISSING:
+        raise ValueError(f"on_missing must be one of {sorted(_VALID_ON_MISSING)!r}, got {value!r}")
+
 
 log = logging.getLogger(__name__)
 
@@ -302,17 +310,31 @@ class LanceDBBackend:
         object_id: str,
         properties: dict[str, Any] | None = None,
         vectors: dict[str, list[float] | None] | None = None,
+        on_missing: OnMissing = "raise",
     ) -> None:
-        if not self.exists(object_id):
-            raise ObjectNotFound(object_id)
-        self._apply_update(object_id, properties, vectors)
+        _validate_on_missing(on_missing)
+        if on_missing != "insert" and not self.exists(object_id):
+            if on_missing == "raise":
+                raise ObjectNotFound(object_id)
+            # on_missing == "skip"
+            return
+        self._apply_update(object_id, properties, vectors, allow_insert=on_missing == "insert")
 
-    def batch_update(self, updates: list[dict[str, Any]]) -> None:
+    def batch_update(
+        self,
+        updates: list[dict[str, Any]],
+        on_missing: OnMissing = "raise",
+    ) -> None:
         """Apply a list of {object_id, properties?, vectors?} updates.
 
         We build one merge_insert batch per call for rows with non-None property/vector writes,
         then handle None-clears individually (they need per-column SQL casts or per-row null batches).
+
+        `on_missing` controls behavior for ids not present in the table: "raise" (default)
+        raises `ObjectNotFound` on the first missing id; "skip" silently drops missing rows;
+        "insert" upserts (a partial row with only the touched columns is inserted).
         """
+        _validate_on_missing(on_missing)
         merge_rows: list[dict[str, Any]] = []
         null_scalar_ops: list[tuple[str, str]] = []  # (object_id, property_name)
         null_vector_ops: list[tuple[str, str]] = []  # (object_id, vector_name)
@@ -326,8 +348,11 @@ class LanceDBBackend:
             if object_id in seen:
                 raise DuplicateObject(object_id)
             seen.add(object_id)
-            if not self.exists(object_id):
-                raise ObjectNotFound(object_id)
+            if on_missing != "insert" and not self.exists(object_id):
+                if on_missing == "raise":
+                    raise ObjectNotFound(object_id)
+                # on_missing == "skip"
+                continue
             properties = upd.get("properties") or {}
             vectors = upd.get("vectors") or {}
 
@@ -352,9 +377,10 @@ class LanceDBBackend:
             groups.setdefault(key, []).append(row)
         for rows in groups.values():
             table = self._batch_from_rows(rows)
-            self._table.merge_insert(
-                OBJECT_ID_COLUMN
-            ).when_matched_update_all().when_not_matched_insert_all().execute(table)
+            builder = self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all()
+            if on_missing == "insert":
+                builder = builder.when_not_matched_insert_all()
+            builder.execute(table)
 
         for object_id, prop in null_scalar_ops:
             self._clear_scalar(object_id, prop)
@@ -366,6 +392,7 @@ class LanceDBBackend:
         object_id: str,
         properties: dict[str, Any] | None,
         vectors: dict[str, list[float] | None] | None,
+        allow_insert: bool,
     ) -> None:
         write_props: dict[str, Any] = {}
         null_props: list[str] = []
@@ -387,9 +414,10 @@ class LanceDBBackend:
         if write_props or write_vecs:
             row = self._prepare_row(object_id, write_props, write_vecs)
             table = self._batch_from_rows([row])
-            self._table.merge_insert(
-                OBJECT_ID_COLUMN
-            ).when_matched_update_all().when_not_matched_insert_all().execute(table)
+            builder = self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all()
+            if allow_insert:
+                builder = builder.when_not_matched_insert_all()
+            builder.execute(table)
         for prop in null_props:
             self._clear_scalar(object_id, prop)
         for vec in null_vecs:
