@@ -190,6 +190,7 @@ update(
     object_id: str,
     properties: dict[str, Any] | None = None,
     vectors: dict[str, list[float] | None] | None = None,
+    on_missing: Literal["raise", "insert", "skip"] = "raise",
 ) -> None
 ```
 
@@ -198,21 +199,38 @@ Merge-update: only the specified fields are touched.
 - Non-None values overwrite the existing value.
 - `None` **clears** the field on this specific object (the column stays,
   the cell becomes null).
-- Raises `ObjectNotFound` if `object_id` does not exist.
 - New properties introduced here are auto-added to the schema.
+- `on_missing` controls behavior when `object_id` is not in the table:
+  - `"raise"` (default): raise `ObjectNotFound`. The merge_insert is
+    update-only, so a row deleted by a concurrent writer between the
+    pre-check and the merge becomes a silent no-op rather than a partial
+    re-insert.
+  - `"insert"`: upsert. If the row is missing, a partial row containing
+    only the touched columns is inserted (other columns are null).
+  - `"skip"`: silently no-op when the row is missing.
 
 ---
 
 ### `batch_update`
 
 ```python
-batch_update(updates: Iterable[ObjectUpdate]) -> None
+batch_update(
+    updates: Iterable[ObjectUpdate],
+    on_missing: Literal["raise", "insert", "skip"] = "raise",
+) -> None
 ```
 
 Applies many `ObjectUpdate` records efficiently. Internally groups updates
 by the set of touched columns so that `merge_insert.when_matched_update_all()`
-never nulls out a column that a sibling update did not touch. Raises
-`ObjectNotFound` on the first missing id.
+never nulls out a column that a sibling update did not touch.
+
+- Raises `DuplicateObject` if the same `object_id` appears twice in one
+  batch (LanceDB's behavior on duplicate merge keys is undefined; we reject
+  to avoid surprises).
+- `on_missing` is the same three-way switch as on `update`. With `"raise"`
+  (default), the first missing id raises `ObjectNotFound` and nothing is
+  written. With `"skip"`, missing rows are silently dropped from the batch
+  (others still apply). With `"insert"`, missing rows become partial inserts.
 
 ---
 

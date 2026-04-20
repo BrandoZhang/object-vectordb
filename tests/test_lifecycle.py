@@ -41,6 +41,19 @@ def test_delete_missing_is_silent_noop(store):
     store.delete("does-not-exist")
 
 
+def test_add_after_delete_reuses_id(store):
+    store.register_vector_field("v", dim=2)
+    store.add("x", properties={"title": "first", "tag": "old"}, vectors={"v": [1.0, 0.0]})
+    store.delete("x")
+    store.add("x", properties={"title": "second"}, vectors={"v": [0.0, 1.0]})
+
+    obj = store.get("x")
+    assert obj.properties["title"] == "second"
+    # The re-added row should not carry over properties from the deleted one.
+    assert obj.properties.get("tag") is None
+    assert obj.vectors["v"] == pytest.approx([0.0, 1.0])
+
+
 def test_add_without_vectors_allowed(store):
     store.add("x", properties={"title": "no vec"})
     obj = store.get("x")

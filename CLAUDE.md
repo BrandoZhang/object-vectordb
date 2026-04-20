@@ -49,7 +49,7 @@ ObjectVectorDB    (db.py)            ← DB handle: open URI, create/list/drop c
 
 **Schema grows automatically for properties.** Property columns are added on first write via Arrow-type inference from the sample value (`arrow_utils.python_value_to_arrow_type`). `None` alone cannot be inferred and raises `SchemaError`.
 
-**Merge-update semantics.** `update()` and `batch_update()` only touch fields the caller passes. `None` clears a field on a specific object (the column stays, the cell becomes null).
+**Merge-update semantics.** `update()` and `batch_update()` only touch fields the caller passes. `None` clears a field on a specific object (the column stays, the cell becomes null). Both methods take `on_missing: Literal["raise", "insert", "skip"] = "raise"` controlling behavior when the target id is absent: default raises `ObjectNotFound` and runs an update-only merge_insert (so a concurrent delete causes a silent no-op, not a partial re-insert); `"insert"` opts into upsert (partial re-insert allowed); `"skip"` silently no-ops on missing ids.
 
 ## Non-obvious LanceDB behaviors we encode
 
@@ -59,6 +59,7 @@ These are load-bearing — changing them quietly will break tests and correctnes
 - **`batch_update` groups rows by column signature.** A single `merge_insert(...).when_matched_update_all()` call treats missing source columns as null overwrites. Without grouping, a row that specifies only `{"n": 1}` in the same batch as a sibling that sets `{"v": [...]}` would null-out `v` on the first row. See `_apply_update` and the grouping in `batch_update` in `backend.py`.
 - **No auto-column-infer on `table.add`.** The backend always calls `add_columns(pa.field(...))` before an insert that references a new property or vector column.
 - **No primary-key uniqueness.** `add()` does a `count_rows("object_id = 'x'")` pre-check and raises `DuplicateObject`. `update()` does the same pre-check and raises `ObjectNotFound`. Race-prone under concurrent writers — documented as single-writer only.
+- **`batch_update` rejects duplicate ids within a single batch.** `merge_insert` against multiple source rows sharing a key is implementation-defined in LanceDB, and column-signature grouping makes apply-order unreliable. `batch_update` raises `DuplicateObject` on intra-batch duplicates, mirroring `add_many`. See `docs/architecture.md` "Concurrency model → Side effects" for the remaining single-writer caveats (TOCTOU on `add`/`update`, update-vs-delete resurrection, registry sidecar races, batch non-atomicity, search-delta staleness).
 - **Index metric wins at search time.** Once an index exists, LanceDB ignores the caller's `distance_type()`. We read the stored metric from the registry and raise `MetricMismatch` if the caller passes a conflicting `metric=`. Do not soften this to a warning.
 - **Renaming an indexed vector column orphans the index.** `rename_field()` drops the index, renames the column, then recreates the index using the stored config.
 

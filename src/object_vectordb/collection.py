@@ -19,7 +19,7 @@ import numpy as np
 
 from .backend import LanceDBBackend
 from .registry import CollectionRegistry
-from .types import IndexInfo, ObjectData, ObjectUpdate, SearchResult, VectorFieldInfo
+from .types import IndexInfo, ObjectData, ObjectUpdate, OnMissing, SearchResult, VectorFieldInfo
 
 if TYPE_CHECKING:
     pass
@@ -98,10 +98,15 @@ class Collection:
         object_id: str,
         properties: dict[str, Any] | None = None,
         vectors: dict[str, list[float] | None] | None = None,
+        on_missing: OnMissing = "raise",
     ) -> None:
-        self._backend.update(object_id, properties, vectors)
+        self._backend.update(object_id, properties, vectors, on_missing=on_missing)
 
-    def batch_update(self, updates: Iterable[ObjectUpdate]) -> None:
+    def batch_update(
+        self,
+        updates: Iterable[ObjectUpdate],
+        on_missing: OnMissing = "raise",
+    ) -> None:
         payload = [
             {
                 "object_id": upd.object_id,
@@ -110,7 +115,7 @@ class Collection:
             }
             for upd in updates
         ]
-        self._backend.batch_update(payload)
+        self._backend.batch_update(payload, on_missing=on_missing)
 
     def drop_fields(self, names: Iterable[str]) -> None:
         self._backend.drop_fields(names)

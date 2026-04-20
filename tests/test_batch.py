@@ -76,6 +76,51 @@ def test_batch_update_on_missing_id_raises(store):
         store.batch_update([ObjectUpdate(object_id="ghost", properties={"n": 2})])
 
 
+def test_batch_update_rejects_duplicate_in_batch(store):
+    store.add("a", properties={"n": 1})
+    with pytest.raises(DuplicateObject):
+        store.batch_update(
+            [
+                ObjectUpdate(object_id="a", properties={"n": 2}),
+                ObjectUpdate(object_id="a", properties={"n": 3}),
+            ]
+        )
+    # Nothing from the rejected batch should have landed.
+    assert store.get("a").properties["n"] == 1
+
+
+def test_batch_update_on_missing_skip_drops_missing_rows(store):
+    store.add("a", properties={"n": 1})
+    store.batch_update(
+        [
+            ObjectUpdate(object_id="a", properties={"n": 99}),
+            ObjectUpdate(object_id="ghost", properties={"n": 0}),
+        ],
+        on_missing="skip",
+    )
+    assert store.get("a").properties["n"] == 99
+    assert store.get("ghost") is None
+
+
+def test_batch_update_on_missing_insert_upserts_missing_rows(store):
+    store.add("a", properties={"n": 1})
+    store.batch_update(
+        [
+            ObjectUpdate(object_id="a", properties={"n": 99}),
+            ObjectUpdate(object_id="b", properties={"n": 7}),
+        ],
+        on_missing="insert",
+    )
+    assert store.get("a").properties["n"] == 99
+    assert store.get("b").properties["n"] == 7
+
+
+def test_batch_update_on_missing_invalid_raises(store):
+    store.add("a", properties={"n": 1})
+    with pytest.raises(ValueError):
+        store.batch_update([ObjectUpdate(object_id="a", properties={"n": 2})], on_missing="bogus")
+
+
 def test_batch_update_large(store):
     store.register_vector_field("v", dim=3)
     for i in range(100):

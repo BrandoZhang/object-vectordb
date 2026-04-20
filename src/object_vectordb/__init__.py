@@ -18,6 +18,7 @@ from .types import (
     IndexInfo,
     ObjectData,
     ObjectUpdate,
+    OnMissing,
     SearchResult,
     VectorFieldInfo,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "ObjectUpdate",
     "ObjectVectorDB",
     "ObjectVectorDBError",
+    "OnMissing",
     "SchemaError",
     "SearchResult",
     "VectorFieldInfo",

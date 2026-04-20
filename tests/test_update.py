@@ -74,3 +74,69 @@ def test_update_preserves_other_rows(store):
     assert store.get("x1").properties["title"] == "A"
     assert store.get("x2").properties["title"] == "b"
     assert store.get("x2").vectors["v"] == pytest.approx([0.0, 1.0])
+
+
+def _racing_delete_exists(backend, object_id_to_delete: str):
+    """Build an `exists` replacement that, on its first call, deletes the row
+    via the backend's underlying table and still returns True. Simulates a
+    concurrent writer winning a delete between the pre-check and the merge."""
+    real_exists = backend.exists
+    calls = {"n": 0}
+
+    def racing_exists(object_id: str) -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1 and object_id == object_id_to_delete:
+            assert real_exists(object_id)
+            backend._table.delete(f"object_id = '{object_id}'")
+            return True
+        return real_exists(object_id)
+
+    return racing_exists
+
+
+def test_update_default_silently_noops_when_concurrently_deleted(store, monkeypatch):
+    # With the default on_missing="raise", the merge_insert is update-only
+    # (no when_not_matched_insert_all), so a row deleted between the
+    # exists() pre-check and the merge_insert stays deleted — strictly
+    # better than the partial-row resurrection we'd get from upsert.
+    store.add("x", properties={"title": "a", "tag": "keep"})
+    backend = store._backend
+    monkeypatch.setattr(backend, "exists", _racing_delete_exists(backend, "x"))
+
+    store.update("x", properties={"title": "B"})
+
+    assert store.get("x") is None
+
+
+def test_update_on_missing_insert_after_delete_writes_partial_row(store):
+    # Pin the upsert behavior: under on_missing="insert" the merge runs as
+    # an upsert (when_not_matched_insert_all). If the row was deleted
+    # before the merge ran, the new row contains ONLY the columns the
+    # update touched — prior column values do not carry over.
+    store.add("x", properties={"title": "a", "tag": "keep"})
+    store.delete("x")
+
+    store.update("x", properties={"title": "B"}, on_missing="insert")
+
+    obj = store.get("x")
+    assert obj is not None
+    assert obj.properties["title"] == "B"
+    assert obj.properties.get("tag") is None
+
+
+def test_update_on_missing_insert_creates_row_when_absent(store):
+    store.update("new-id", properties={"title": "fresh"}, on_missing="insert")
+    obj = store.get("new-id")
+    assert obj is not None
+    assert obj.properties["title"] == "fresh"
+
+
+def test_update_on_missing_skip_is_silent_noop(store):
+    store.update("ghost", properties={"title": "x"}, on_missing="skip")
+    assert store.get("ghost") is None
+
+
+def test_update_on_missing_invalid_raises(store):
+    store.add("x", properties={"title": "a"})
+    with pytest.raises(ValueError):
+        store.update("x", properties={"title": "b"}, on_missing="bogus")
