@@ -322,6 +322,58 @@ Raises:
 
 ---
 
+### `search_within`
+
+```python
+search_within(
+    query_vector: list[float] | np.ndarray,
+    vector_field: str,
+    max_distance: float,
+    *,
+    min_distance: float | None = None,
+    limit: int | None = None,
+    metric: str | None = None,
+    where: str | None = None,
+    select: list[str] | None = None,
+    nprobes: int | None = None,
+    refine_factor: int | None = None,
+    exact: bool = False,
+) -> list[SearchResult]
+```
+
+Radius (distance-bounded) vector search. Returns every object whose
+distance from `query_vector` lies in the half-open interval
+`[min_distance or 0.0, max_distance)`. Results are sorted by ascending
+distance (= descending `SearchResult.score`), matching `search()`.
+
+- `max_distance` is in LanceDB's **native distance space** for the resolved
+  metric (not the similarity score). Conversion table:
+
+  | metric   | distance formula          | `max_distance` for `min_score` `s`    |
+  | -------- | ------------------------- | ------------------------------------- |
+  | `cosine` | `1 - cos_sim`             | `1 - s`                               |
+  | `l2`     | squared Euclidean         | `(1 / s) - 1` (since `score = 1/(1+d)`) |
+  | `dot`    | `1 - dot(q, v)`           | `1 - s` (score equals raw dot)        |
+
+  `dot` distances can be negative (when `dot > 1`); `min_distance` must also
+  be negative in that case. `cosine` distances lie in `[0, 2]`; `l2` in
+  `[0, ∞)`.
+- `limit=None` means unbounded. Other filter/projection args behave exactly
+  as in `search()`.
+- `exact=True` bypasses the ANN index for this query so the scan is
+  guaranteed to find every match. **Radius queries against an IVF index are
+  approximate** — matches in unprobed partitions are silently missed. Pass
+  `exact=True` when completeness matters more than latency.
+- Composes with `rrf_merge` unchanged (results are still rank-ordered).
+
+Raises:
+
+- `ValueError` if `query_vector` is empty, `max_distance` is `NaN`/`±inf`,
+  `min_distance` is `NaN`/`±inf`, or `min_distance >= max_distance`.
+- `VectorFieldNotRegistered` if `vector_field` is unknown.
+- `DimensionMismatch` if `len(query_vector) != dim`.
+- `MetricMismatch` on an index/metric conflict.
+
 ---
 
 ## Module-level: `rrf_merge`

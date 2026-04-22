@@ -150,6 +150,60 @@ class Collection:
             refine_factor=refine_factor,
         )
 
+    def search_within(
+        self,
+        query_vector: list[float] | np.ndarray,
+        vector_field: str,
+        max_distance: float,
+        *,
+        min_distance: float | None = None,
+        limit: int | None = None,
+        metric: str | None = None,
+        where: str | None = None,
+        select: list[str] | None = None,
+        nprobes: int | None = None,
+        refine_factor: int | None = None,
+        exact: bool = False,
+    ) -> list[SearchResult]:
+        """Radius (distance-bounded) vector search.
+
+        Returns every object whose LanceDB `_distance` from `query_vector` lies
+        in the half-open interval `[min_distance or 0.0, max_distance)`. Results
+        are sorted by ascending distance (= descending `SearchResult.score`),
+        matching the `search()` ordering.
+
+        `max_distance` is in LanceDB's native distance space for the resolved
+        metric:
+
+        - `cosine`: `1 - cosine_similarity` (0 identical, 1 orthogonal, 2 opposite)
+        - `l2`:     squared Euclidean distance
+        - `dot`:    `1 - dot_product`
+
+        To convert a desired `SearchResult.score` threshold into `max_distance`:
+        for `cosine` / `dot`, pass `max_distance = 1 - min_score`; for `l2`,
+        pass `max_distance = (1 / min_score) - 1` (since `score = 1 / (1 + d)`).
+
+        `limit=None` (the default) means unbounded. Other args behave the same
+        as `search()`. `exact=True` disables the ANN index for this query so
+        the radius scan is guaranteed to find every match — IVF indexes make
+        radius queries approximate (matches in unprobed partitions are missed).
+        """
+        if isinstance(query_vector, np.ndarray):
+            query_vector = query_vector.astype(np.float32).tolist()
+        return self._backend.search_within(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            max_distance=max_distance,
+            min_distance=min_distance,
+            limit=limit,
+            metric=metric,
+            where=where,
+            select=select,
+            nprobes=nprobes,
+            refine_factor=refine_factor,
+            exact=exact,
+        )
+
     def create_index(
         self,
         vector_field: str,
