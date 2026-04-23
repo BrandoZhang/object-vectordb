@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from object_vectordb import ObjectUpdate
+from object_vectordb import ObjectAdd, ObjectUpdate
 
 from .conftest import DEFAULT_DIM, random_vectors
 
@@ -55,11 +55,11 @@ def test_batch_add_1k(benchmark, empty_collection):
     def op():
         round_idx = next(round_counter)
         items = [
-            {
-                "object_id": f"r{round_idx}_obj_{i:04d}",
-                "properties": {"bucket": i % 10},
-                "vectors": {"v": vecs[i].tolist()},
-            }
+            ObjectAdd(
+                object_id=f"r{round_idx}_obj_{i:04d}",
+                properties={"bucket": i % 10},
+                vectors={"v": vecs[i].tolist()},
+            )
             for i in range(1000)
         ]
         col.batch_add(items)

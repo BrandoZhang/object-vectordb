@@ -16,6 +16,7 @@ from .exceptions import (
 from .fusion import rrf_merge
 from .types import (
     IndexInfo,
+    ObjectAdd,
     ObjectData,
     ObjectUpdate,
     OnMissing,
@@ -29,6 +30,7 @@ __all__ = [
     "DuplicateObject",
     "IndexInfo",
     "MetricMismatch",
+    "ObjectAdd",
     "ObjectData",
     "ObjectNotFound",
     "ObjectUpdate",

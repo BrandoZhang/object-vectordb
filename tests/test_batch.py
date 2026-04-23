@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from object_vectordb import DuplicateObject, ObjectNotFound, ObjectUpdate
+from object_vectordb import DuplicateObject, ObjectAdd, ObjectNotFound, ObjectUpdate
 
 
 def test_batch_add_inserts_all(store):
     store.register_vector_field("v", dim=2)
     store.batch_add(
         [
-            {"object_id": "a", "properties": {"n": 1}, "vectors": {"v": [1.0, 0.0]}},
-            {"object_id": "b", "properties": {"n": 2}, "vectors": {"v": [0.0, 1.0]}},
-            {"object_id": "c", "properties": {"n": 3}, "vectors": {"v": [1.0, 1.0]}},
+            ObjectAdd(object_id="a", properties={"n": 1}, vectors={"v": [1.0, 0.0]}),
+            ObjectAdd(object_id="b", properties={"n": 2}, vectors={"v": [0.0, 1.0]}),
+            ObjectAdd(object_id="c", properties={"n": 3}, vectors={"v": [1.0, 1.0]}),
         ]
     )
     assert store.get("a").properties["n"] == 1
@@ -23,8 +23,8 @@ def test_batch_add_rejects_duplicates_in_batch(store):
     with pytest.raises(DuplicateObject):
         store.batch_add(
             [
-                {"object_id": "a", "properties": {"n": 1}},
-                {"object_id": "a", "properties": {"n": 2}},
+                ObjectAdd(object_id="a", properties={"n": 1}),
+                ObjectAdd(object_id="a", properties={"n": 2}),
             ]
         )
 
@@ -32,7 +32,7 @@ def test_batch_add_rejects_duplicates_in_batch(store):
 def test_batch_add_rejects_existing_id(store):
     store.add("a", properties={"n": 1})
     with pytest.raises(DuplicateObject):
-        store.batch_add([{"object_id": "a", "properties": {"n": 99}}])
+        store.batch_add([ObjectAdd(object_id="a", properties={"n": 99})])
 
 
 def test_batch_update_mixes_properties_and_vectors(store):

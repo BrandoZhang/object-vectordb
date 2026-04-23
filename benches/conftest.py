@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from object_vectordb import Collection, ObjectVectorDB
+from object_vectordb import Collection, ObjectAdd, ObjectVectorDB
 
 DEFAULT_DIM = 128
 SEED = 42
@@ -43,11 +43,11 @@ def _seed_collection(
     for start in range(0, n, chunk):
         end = min(start + chunk, n)
         items = [
-            {
-                "object_id": f"obj_{i:08d}",
-                "properties": {"bucket": i % 10, "tag": f"t{i % 100}"},
-                "vectors": {field: vectors[i].tolist()},
-            }
+            ObjectAdd(
+                object_id=f"obj_{i:08d}",
+                properties={"bucket": i % 10, "tag": f"t{i % 100}"},
+                vectors={field: vectors[i].tolist()},
+            )
             for i in range(start, end)
         ]
         collection.batch_add(items)

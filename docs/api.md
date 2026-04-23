@@ -142,12 +142,13 @@ Inserts a new object. Raises `DuplicateObject` if `object_id` already exists.
 ### `batch_add`
 
 ```python
-batch_add(items: list[dict[str, Any]]) -> None
+batch_add(items: Iterable[ObjectAdd]) -> None
 ```
 
-Bulk insert. Each item is a dict with keys `object_id`, `properties?`,
-`vectors?`. Same validation as `add()`. Raises `DuplicateObject` if any id
-already exists in the table or appears twice in the batch.
+Bulk insert. Each item is an [`ObjectAdd`](#objectadd) with fields
+`object_id`, `properties?`, `vectors?` — same shape and validation as
+`add()`. Raises `DuplicateObject` if any id already exists in the table
+or appears twice in the batch.
 
 ---
 
@@ -536,6 +537,18 @@ class SearchResult:
 
 See [architecture.md § score conversion](architecture.md#score-conversion)
 for how `score` is derived per metric.
+
+### `ObjectAdd`
+
+Input to `batch_add()`. Fields mirror the arguments of `add()`.
+
+```python
+@dataclass
+class ObjectAdd:
+    object_id: str
+    properties: dict[str, Any] | None = None
+    vectors: dict[str, list[float] | None] | None = None
+```
 
 ### `ObjectUpdate`
 

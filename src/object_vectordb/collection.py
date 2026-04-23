@@ -19,7 +19,15 @@ import numpy as np
 
 from .backend import LanceDBBackend
 from .registry import CollectionRegistry
-from .types import IndexInfo, ObjectData, ObjectUpdate, OnMissing, SearchResult, VectorFieldInfo
+from .types import (
+    IndexInfo,
+    ObjectAdd,
+    ObjectData,
+    ObjectUpdate,
+    OnMissing,
+    SearchResult,
+    VectorFieldInfo,
+)
 
 if TYPE_CHECKING:
     pass
@@ -74,8 +82,16 @@ class Collection:
     ) -> None:
         self._backend.add(object_id, properties, vectors)
 
-    def batch_add(self, items: list[dict[str, Any]]) -> None:
-        self._backend.batch_add(items)
+    def batch_add(self, items: Iterable[ObjectAdd]) -> None:
+        payload = [
+            {
+                "object_id": item.object_id,
+                "properties": item.properties,
+                "vectors": item.vectors,
+            }
+            for item in items
+        ]
+        self._backend.batch_add(payload)
 
     def get(self, object_id: str) -> ObjectData | None:
         row = self._backend.get(object_id)
