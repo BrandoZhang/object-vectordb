@@ -164,6 +164,20 @@ object does not exist.
 
 ---
 
+### `batch_get`
+
+```python
+batch_get(object_ids: Iterable[str]) -> list[ObjectData | None]
+```
+
+Fetch multiple objects in a single scan. Returns a list aligned to the
+input order; each position is either the matching `ObjectData` or `None`
+if that id is absent. Duplicate input ids return the same object at each
+position. Empty input returns `[]`. Much cheaper than N calls to `get()`
+because it runs one `where object_id IN (...)` scan instead of N.
+
+---
+
 ### `exists`
 
 ```python
@@ -209,6 +223,24 @@ Merge-update: only the specified fields are touched.
   - `"insert"`: upsert. If the row is missing, a partial row containing
     only the touched columns is inserted (other columns are null).
   - `"skip"`: silently no-op when the row is missing.
+
+---
+
+### `upsert`
+
+```python
+upsert(
+    object_id: str,
+    properties: dict[str, Any] | None = None,
+    vectors: dict[str, list[float] | None] | None = None,
+) -> None
+```
+
+Insert if missing, merge-update if present. Equivalent to
+`update(object_id, ..., on_missing="insert")` but named for the common case.
+Semantics are **merge, not replace**: unspecified fields on an existing row
+are preserved, and missing rows are created as partial rows containing only
+the fields you passed.
 
 ---
 

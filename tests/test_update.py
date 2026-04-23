@@ -140,3 +140,43 @@ def test_update_on_missing_invalid_raises(store):
     store.add("x", properties={"title": "a"})
     with pytest.raises(ValueError):
         store.update("x", properties={"title": "b"}, on_missing="bogus")
+
+
+# ---------------------------------------------------------------------------
+# upsert
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_inserts_when_missing(store):
+    store.upsert("new", properties={"title": "hello"})
+    obj = store.get("new")
+    assert obj is not None
+    assert obj.properties["title"] == "hello"
+
+
+def test_upsert_merges_when_present(store):
+    store.register_vector_field("v", dim=2)
+    store.add("x", properties={"title": "a", "tag": "keep"}, vectors={"v": [1.0, 0.0]})
+    # Merge semantics: unspecified fields on the existing row must be preserved.
+    store.upsert("x", properties={"title": "A"})
+    obj = store.get("x")
+    assert obj.properties["title"] == "A"
+    assert obj.properties["tag"] == "keep"
+    assert obj.vectors["v"] == pytest.approx([1.0, 0.0])
+
+
+def test_upsert_with_vectors_only(store):
+    store.register_vector_field("v", dim=2)
+    store.add("x", properties={"title": "a"}, vectors={"v": [1.0, 0.0]})
+    store.upsert("x", vectors={"v": [0.0, 1.0]})
+    obj = store.get("x")
+    assert obj.properties["title"] == "a"
+    assert obj.vectors["v"] == pytest.approx([0.0, 1.0])
+
+
+def test_upsert_null_clears_existing_property(store):
+    store.add("x", properties={"title": "a", "tag": "old"})
+    store.upsert("x", properties={"tag": None})
+    obj = store.get("x")
+    assert obj.properties["title"] == "a"
+    assert obj.properties["tag"] is None

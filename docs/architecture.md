@@ -198,6 +198,11 @@ non-None value first, then you can subsequently clear that column.
   rows. `add()` does a pre-check with `count_rows("object_id = 'x'")` and
   raises `DuplicateObject` if the id exists. This is race-prone in a
   multi-writer world — documented as single-writer.
+- **`object_id` scalar index is auto-created.** Without an index on
+  `object_id`, every `get` / `exists` / `delete` / per-row existence pre-
+  check runs a full table scan (O(N)), and per-row batch checks are O(N²).
+  `_ensure_table` calls `create_scalar_index("object_id", index_type="BTREE")`
+  at bootstrap — idempotent, and migrates pre-index tables on first open.
 - **`update` is silent on empty match.** `table.update(where=...)` affects 0
   rows without complaint. `ObjectVectorDB.update()` pre-checks existence and
   raises `ObjectNotFound`.

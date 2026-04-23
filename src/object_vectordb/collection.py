@@ -103,6 +103,26 @@ class Collection:
             vectors=row["vectors"],
         )
 
+    def batch_get(self, object_ids: Iterable[str]) -> list[ObjectData | None]:
+        """Fetch multiple objects in a single scan.
+
+        Returns a list aligned to the input order. Each position is either the
+        matching `ObjectData` or `None` if that id is absent. Duplicate input
+        ids return the same object at each position. Empty input returns `[]`.
+        """
+        ids = list(object_ids)
+        rows = self._backend.batch_get(ids)
+        return [
+            None
+            if row is None
+            else ObjectData(
+                object_id=row["object_id"],
+                properties=row["properties"],
+                vectors=row["vectors"],
+            )
+            for row in rows
+        ]
+
     def exists(self, object_id: str) -> bool:
         return self._backend.exists(object_id)
 
@@ -117,6 +137,21 @@ class Collection:
         on_missing: OnMissing = "raise",
     ) -> None:
         self._backend.update(object_id, properties, vectors, on_missing=on_missing)
+
+    def upsert(
+        self,
+        object_id: str,
+        properties: dict[str, Any] | None = None,
+        vectors: dict[str, list[float] | None] | None = None,
+    ) -> None:
+        """Insert if missing, merge-update if present.
+
+        Equivalent to `update(object_id, ..., on_missing="insert")`, but named
+        for the common case. Semantics are merge, not replace: fields you do
+        not pass are preserved on existing rows, and missing rows are created
+        as partial rows containing only the fields you passed.
+        """
+        self._backend.update(object_id, properties, vectors, on_missing="insert")
 
     def batch_update(
         self,

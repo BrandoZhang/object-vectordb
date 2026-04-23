@@ -77,9 +77,25 @@ class LanceDBBackend:
 
     def _ensure_table(self):
         if self._table_name in self._db.table_names():
-            return self._db.open_table(self._table_name)
-        schema = pa.schema([pa.field(OBJECT_ID_COLUMN, pa.string(), nullable=False)])
-        return self._db.create_table(self._table_name, schema=schema)
+            table = self._db.open_table(self._table_name)
+        else:
+            schema = pa.schema([pa.field(OBJECT_ID_COLUMN, pa.string(), nullable=False)])
+            table = self._db.create_table(self._table_name, schema=schema)
+        self._ensure_object_id_index(table)
+        return table
+
+    @staticmethod
+    def _ensure_object_id_index(table) -> None:
+        # BTREE on object_id turns every per-row existence check and id lookup
+        # from O(N) scans into O(log N). add / update / get / exists / delete
+        # and the per-row duplicate pre-check in batch_add / batch_update all
+        # rely on `where object_id = 'x'` and pay O(N) without this index.
+        # `create_scalar_index` is idempotent in LanceDB, so this is safe on
+        # repeated table opens and on tables migrated from pre-index builds.
+        for idx in table.list_indices():
+            if getattr(idx, "columns", None) == [OBJECT_ID_COLUMN]:
+                return
+        table.create_scalar_index(OBJECT_ID_COLUMN, index_type="BTREE")
 
     def _table_columns(self) -> set[str]:
         return set(self._table.schema.names)
@@ -274,6 +290,29 @@ class LanceDBBackend:
         if not results:
             return None
         return self._row_to_object_dict(results[0])
+
+    def batch_get(self, object_ids: list[str]) -> list[dict[str, Any] | None]:
+        """Fetch multiple objects in one scan.
+
+        Returns a list aligned to `object_ids`: each position is either the
+        matching object dict or `None` if that id is absent. Duplicate input
+        ids return the same object at each position.
+        """
+        if not object_ids:
+            return []
+        # One scan for the union; re-align to input order (including duplicates).
+        unique = list(dict.fromkeys(object_ids))
+        in_list = ", ".join(_quote_literal(oid) for oid in unique)
+        rows = (
+            self._table.search()
+            .where(f"{OBJECT_ID_COLUMN} IN ({in_list})", prefilter=True)
+            .limit(len(unique))
+            .to_list()
+        )
+        by_id: dict[str, dict[str, Any]] = {
+            row[OBJECT_ID_COLUMN]: self._row_to_object_dict(row) for row in rows
+        }
+        return [by_id.get(oid) for oid in object_ids]
 
     def _row_to_object_dict(self, row: dict[str, Any]) -> dict[str, Any]:
         properties: dict[str, Any] = {}
