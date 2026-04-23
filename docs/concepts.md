@@ -169,7 +169,7 @@ store.rename_field("text_openai", "text_oai_v1")     # zero-copy (+ index rebuil
 
 ## Filter syntax
 
-The `where=` parameter on `search()`, `list()`, and `export_vectors()` is a
+The `where=` parameter on `search()`, `list_objects()`, and `export_vectors()` is a
 **DataFusion SQL** expression. See [filters.md](filters.md) for the full
 reference and examples.
 

@@ -105,10 +105,10 @@ Returns a `VectorFieldInfo` describing the registered field.
 
 ---
 
-### `vector_fields`
+### `list_vector_fields`
 
 ```python
-vector_fields() -> list[VectorFieldInfo]
+list_vector_fields() -> list[VectorFieldInfo]
 ```
 
 Lists all registered vector fields and their current state (dim, whether an
@@ -139,10 +139,10 @@ Inserts a new object. Raises `DuplicateObject` if `object_id` already exists.
 
 ---
 
-### `add_many`
+### `batch_add`
 
 ```python
-add_many(items: list[dict[str, Any]]) -> None
+batch_add(items: list[dict[str, Any]]) -> None
 ```
 
 Bulk insert. Each item is a dict with keys `object_id`, `properties?`,
@@ -475,10 +475,10 @@ array.
 
 ---
 
-### `list`
+### `list_objects`
 
 ```python
-list(
+list_objects(
     where: str | None = None,
     select: list[str] | None = None,
     limit: int | None = None,
@@ -551,7 +551,7 @@ class ObjectUpdate:
 
 ### `VectorFieldInfo`
 
-Returned by `vector_fields()` and `register_vector_field()`.
+Returned by `list_vector_fields()` and `register_vector_field()`.
 
 ```python
 @dataclass
@@ -586,7 +586,7 @@ compatibility with dict-style callers.
 | Exception                 | Raised by                                                                                      |
 | ------------------------- | ---------------------------------------------------------------------------------------------- |
 | `ObjectNotFound`          | `update`, `batch_update` when `object_id` does not exist.                                      |
-| `DuplicateObject`         | `add`, `add_many` when `object_id` already exists (or is duplicated in the batch).             |
+| `DuplicateObject`         | `add`, `batch_add` when `object_id` already exists (or is duplicated in the batch).             |
 | `VectorFieldNotRegistered`| `search`, `export_vectors`, `create_index`, `drop_index`, `rebuild_index` on unknown field.    |
 | `DimensionMismatch`       | Any write or search where vector length ≠ registered dim.                                      |
 | `SchemaError`             | Reserved-prefix property names, None-typed new columns, rename/drop conflicts, etc.            |

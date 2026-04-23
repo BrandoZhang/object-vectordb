@@ -46,7 +46,7 @@ def test_batch_update_1k(benchmark, prefilled_1k):
     benchmark.pedantic(op, rounds=2, iterations=1, warmup_rounds=0)
 
 
-def test_add_many_1k(benchmark, empty_collection):
+def test_batch_add_1k(benchmark, empty_collection):
     col = empty_collection
     col.register_vector_field("v", dim=DEFAULT_DIM)
     vecs = random_vectors(1000, DEFAULT_DIM)
@@ -62,6 +62,6 @@ def test_add_many_1k(benchmark, empty_collection):
             }
             for i in range(1000)
         ]
-        col.add_many(items)
+        col.batch_add(items)
 
     benchmark.pedantic(op, rounds=2, iterations=1, warmup_rounds=0)

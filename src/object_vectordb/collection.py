@@ -63,7 +63,7 @@ class Collection:
     ) -> VectorFieldInfo:
         return self._backend.register_vector_field(name, dim, description)
 
-    def vector_fields(self) -> list[VectorFieldInfo]:
+    def list_vector_fields(self) -> list[VectorFieldInfo]:
         return self._backend.list_vector_fields()
 
     def add(
@@ -74,8 +74,8 @@ class Collection:
     ) -> None:
         self._backend.add(object_id, properties, vectors)
 
-    def add_many(self, items: list[dict[str, Any]]) -> None:
-        self._backend.add_many(items)
+    def batch_add(self, items: list[dict[str, Any]]) -> None:
+        self._backend.batch_add(items)
 
     def get(self, object_id: str) -> ObjectData | None:
         row = self._backend.get(object_id)
@@ -234,7 +234,7 @@ class Collection:
     ) -> tuple[list[str], np.ndarray]:
         return self._backend.export_vectors(vector_field, where=where)
 
-    def list(
+    def list_objects(
         self,
         where: str | None = None,
         select: list[str] | None = None,

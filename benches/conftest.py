@@ -37,7 +37,7 @@ def _seed_collection(
 ) -> None:
     collection.register_vector_field(field, dim=dim)
     vectors = random_vectors(n, dim)
-    # Batch inserts via add_many for speed. Chunks of 5 000 rows keep pyarrow
+    # Batch inserts via batch_add for speed. Chunks of 5 000 rows keep pyarrow
     # RecordBatch sizes reasonable.
     chunk = 5000
     for start in range(0, n, chunk):
@@ -50,7 +50,7 @@ def _seed_collection(
             }
             for i in range(start, end)
         ]
-        collection.add_many(items)
+        collection.batch_add(items)
     if with_index and n >= 256:
         # num_partitions must be <= n / some threshold. Use 16 for small N,
         # scale roughly with sqrt(n) for larger.

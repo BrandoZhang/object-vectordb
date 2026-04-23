@@ -21,7 +21,7 @@ def test_register_returns_info(store):
 def test_register_idempotent_on_same_dim(store):
     store.register_vector_field("v", dim=128)
     store.register_vector_field("v", dim=128)
-    assert len(store.vector_fields()) == 1
+    assert len(store.list_vector_fields()) == 1
 
 
 def test_register_conflicting_dim_raises(store):
@@ -48,7 +48,7 @@ def test_auto_register(tmp_path):
     db = ObjectVectorDB(uri=str(tmp_path / "db"))
     s = db.collection("default", auto_register=True)
     s.add("x", vectors={"clip": [1.0, 2.0, 3.0]})
-    fields = {v.name: v.dim for v in s.vector_fields()}
+    fields = {v.name: v.dim for v in s.list_vector_fields()}
     assert fields == {"clip": 3}
 
 
@@ -63,7 +63,7 @@ def test_drop_vector_field(store):
     store.add("x", vectors={"v": [1.0, 2.0, 3.0]})
 
     store.drop_fields(["v"])
-    names = {f.name for f in store.vector_fields()}
+    names = {f.name for f in store.list_vector_fields()}
     assert "v" not in names
     # Object still exists, vectors dict no longer includes v
     obj = store.get("x")
@@ -98,7 +98,7 @@ def test_rename_vector_field(store):
     store.register_vector_field("v", dim=2)
     store.add("x", vectors={"v": [1.0, 2.0]})
     store.rename_field("v", "w")
-    fields = {f.name for f in store.vector_fields()}
+    fields = {f.name for f in store.list_vector_fields()}
     assert fields == {"w"}
     obj = store.get("x")
     assert obj.vectors["w"] == pytest.approx([1.0, 2.0])

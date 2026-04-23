@@ -74,7 +74,7 @@ ids, arr = store.export_vectors(
 Paginate through a subset:
 
 ```python
-page = store.list(
+page = store.list_objects(
     where="views > 100",
     select=["title", "views"],
     limit=50,

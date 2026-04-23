@@ -5,9 +5,9 @@ import pytest
 from object_vectordb import DuplicateObject, ObjectNotFound, ObjectUpdate
 
 
-def test_add_many_inserts_all(store):
+def test_batch_add_inserts_all(store):
     store.register_vector_field("v", dim=2)
-    store.add_many(
+    store.batch_add(
         [
             {"object_id": "a", "properties": {"n": 1}, "vectors": {"v": [1.0, 0.0]}},
             {"object_id": "b", "properties": {"n": 2}, "vectors": {"v": [0.0, 1.0]}},
@@ -19,9 +19,9 @@ def test_add_many_inserts_all(store):
     assert store.get("c").properties["n"] == 3
 
 
-def test_add_many_rejects_duplicates_in_batch(store):
+def test_batch_add_rejects_duplicates_in_batch(store):
     with pytest.raises(DuplicateObject):
-        store.add_many(
+        store.batch_add(
             [
                 {"object_id": "a", "properties": {"n": 1}},
                 {"object_id": "a", "properties": {"n": 2}},
@@ -29,10 +29,10 @@ def test_add_many_rejects_duplicates_in_batch(store):
         )
 
 
-def test_add_many_rejects_existing_id(store):
+def test_batch_add_rejects_existing_id(store):
     store.add("a", properties={"n": 1})
     with pytest.raises(DuplicateObject):
-        store.add_many([{"object_id": "a", "properties": {"n": 99}}])
+        store.batch_add([{"object_id": "a", "properties": {"n": 99}}])
 
 
 def test_batch_update_mixes_properties_and_vectors(store):

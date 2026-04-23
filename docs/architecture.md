@@ -219,7 +219,7 @@ non-None value first, then you can subsequently clear that column.
   implementation-defined, and our column-signature grouping would split such
   rows into separate groups with unreliable apply-order. `batch_update`
   therefore raises `DuplicateObject` on an intra-batch duplicate, mirroring
-  `add_many`'s behavior.
+  `batch_add`'s behavior.
 
 ## Score conversion
 

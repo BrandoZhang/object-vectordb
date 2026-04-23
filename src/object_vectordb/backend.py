@@ -245,7 +245,7 @@ class LanceDBBackend:
         # of the same id (single-writer, but defensive).
         self._table.merge_insert(OBJECT_ID_COLUMN).when_not_matched_insert_all().execute(table)
 
-    def add_many(
+    def batch_add(
         self,
         items: list[dict[str, Any]],
     ) -> None:
@@ -348,7 +348,7 @@ class LanceDBBackend:
             object_id = upd["object_id"]
             # LanceDB's merge_insert against multiple source rows sharing a key is
             # implementation-defined, and splitting rows across signature groups
-            # makes apply-order unreliable. Match add_many's behavior and reject.
+            # makes apply-order unreliable. Match batch_add's behavior and reject.
             if object_id in seen:
                 raise DuplicateObject(object_id)
             seen.add(object_id)

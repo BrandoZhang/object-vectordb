@@ -152,7 +152,7 @@ Vector dim = 128 throughout.
 | `search`, brute-force, 1 K rows (quick tier)    | < 50 ms @ 100 K | 10.3 ms      | on track |
 | `register_vector_field` on 10 K-row table       | < 1 s @ 1 M   | 10.4 ms        | on track (zero-copy) |
 | `export_vectors` from 1 K-row table             | < 10 s @ 100 K | 70.1 ms       | on track |
-| `add_many` 1 000 rows                            | — (informational) | 6.82 s    | see note |
+| `batch_add` 1 000 rows                           | — (informational) | 6.82 s    | see note |
 | `add` single object                              | < 10 ms (as part of roundtrip) | 40.4 ms | **over target** |
 | `add` + `get` roundtrip, single object          | < 10 ms        | 51.1 ms        | **over target** |
 | `get` single object (1 K-row table)              | — (part of roundtrip) | 296.9 ms | see note |
@@ -168,8 +168,8 @@ Vector dim = 128 throughout.
   O(N) per call, making `batch_update` O(N²) overall on the collection
   size. Creating a `BTREE` scalar index on `object_id` in the backend
   should close this gap — filed as a follow-up.
-- **`add_many` 1 000 rows at 6.82 s** is dominated by the per-row
-  duplicate-check in `add_many` (same root cause). Pure LanceDB
+- **`batch_add` 1 000 rows at 6.82 s** is dominated by the per-row
+  duplicate-check in `batch_add` (same root cause). Pure LanceDB
   `table.add(batch)` without the check is ~10 ms for 1 000 rows.
 - **Spec-scale (100 K / 1 M row) numbers are not yet recorded**. Run
   `uv run pytest benches/ --benchmark-only -m full` on a sustained-CPU
