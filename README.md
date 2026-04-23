@@ -152,7 +152,7 @@ Vector dim = 128 throughout.
 | `search`, brute-force, 1 K rows (quick tier)    | < 50 ms @ 100 K | 10.3 ms      | on track |
 | `register_vector_field` on 10 K-row table       | < 1 s @ 1 M   | 10.4 ms        | on track (zero-copy) |
 | `export_vectors` from 1 K-row table             | < 10 s @ 100 K | 70.1 ms       | on track |
-| `add_many` 1 000 rows                            | — (informational) | 6.82 s    | see note |
+| `batch_add` 1 000 rows                           | — (informational) | 6.82 s    | see note |
 | `add` single object                              | < 10 ms (as part of roundtrip) | 40.4 ms | **over target** |
 | `add` + `get` roundtrip, single object          | < 10 ms        | 51.1 ms        | **over target** |
 | `get` single object (1 K-row table)              | — (part of roundtrip) | 296.9 ms | see note |
@@ -160,17 +160,15 @@ Vector dim = 128 throughout.
 
 **Notes**:
 
-- **`get`, `batch_update` and single-row `add` are all bottlenecked by the
-  same thing**: LanceDB does a full table scan for every `object_id` lookup
-  because there is no scalar index on `object_id` by default. `get()` uses
-  `table.search().where("object_id = ...").limit(1)`; `batch_update` does a
-  per-row `count_rows("object_id = 'x'")` existence pre-check. Both are
-  O(N) per call, making `batch_update` O(N²) overall on the collection
-  size. Creating a `BTREE` scalar index on `object_id` in the backend
-  should close this gap — filed as a follow-up.
-- **`add_many` 1 000 rows at 6.82 s** is dominated by the per-row
-  duplicate-check in `add_many` (same root cause). Pure LanceDB
-  `table.add(batch)` without the check is ~10 ms for 1 000 rows.
+- **Benchmark numbers above predate the `object_id` BTREE scalar index.**
+  The backend now auto-creates a `BTREE` scalar index on `object_id` at
+  table bootstrap, so `get()`, `exists()`, `delete()`, the per-row existence
+  pre-checks in `add` / `update` / `batch_add` / `batch_update`, and the
+  new `batch_get()` all run on an O(log N) index lookup instead of a full
+  table scan. Re-record these numbers before shipping.
+- **Existing tables are migrated on open**: `_ensure_object_id_index`
+  checks `list_indices()` and creates the BTREE if it's missing, so
+  reopening a pre-index collection builds the index once and keeps it.
 - **Spec-scale (100 K / 1 M row) numbers are not yet recorded**. Run
   `uv run pytest benches/ --benchmark-only -m full` on a sustained-CPU
   machine to collect them; expect `batch_update` to dominate runtime.

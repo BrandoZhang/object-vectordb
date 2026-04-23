@@ -17,7 +17,7 @@ def test_create_index_sets_has_index(store):
     store.create_index(
         "v", index_type="IVF_PQ", metric="cosine", num_partitions=2, num_sub_vectors=1
     )
-    info = {f.name: f for f in store.vector_fields()}["v"]
+    info = {f.name: f for f in store.list_vector_fields()}["v"]
     assert info.has_index is True
 
 
@@ -45,7 +45,7 @@ def test_drop_index_clears_has_index(store):
         "v", index_type="IVF_PQ", metric="cosine", num_partitions=2, num_sub_vectors=1
     )
     store.drop_index("v")
-    info = {f.name: f for f in store.vector_fields()}["v"]
+    info = {f.name: f for f in store.list_vector_fields()}["v"]
     assert info.has_index is False
     assert store.index_info("v") is None
 

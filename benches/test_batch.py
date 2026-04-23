@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from object_vectordb import ObjectUpdate
+from object_vectordb import ObjectAdd, ObjectUpdate
 
 from .conftest import DEFAULT_DIM, random_vectors
 
@@ -46,7 +46,7 @@ def test_batch_update_1k(benchmark, prefilled_1k):
     benchmark.pedantic(op, rounds=2, iterations=1, warmup_rounds=0)
 
 
-def test_add_many_1k(benchmark, empty_collection):
+def test_batch_add_1k(benchmark, empty_collection):
     col = empty_collection
     col.register_vector_field("v", dim=DEFAULT_DIM)
     vecs = random_vectors(1000, DEFAULT_DIM)
@@ -55,13 +55,13 @@ def test_add_many_1k(benchmark, empty_collection):
     def op():
         round_idx = next(round_counter)
         items = [
-            {
-                "object_id": f"r{round_idx}_obj_{i:04d}",
-                "properties": {"bucket": i % 10},
-                "vectors": {"v": vecs[i].tolist()},
-            }
+            ObjectAdd(
+                object_id=f"r{round_idx}_obj_{i:04d}",
+                properties={"bucket": i % 10},
+                vectors={"v": vecs[i].tolist()},
+            )
             for i in range(1000)
         ]
-        col.add_many(items)
+        col.batch_add(items)
 
     benchmark.pedantic(op, rounds=2, iterations=1, warmup_rounds=0)

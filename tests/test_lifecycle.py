@@ -65,3 +65,68 @@ def test_add_without_properties_allowed(store):
     store.register_vector_field("v", dim=2)
     store.add("x", vectors={"v": [0.0, 1.0]})
     assert store.get("x").vectors["v"] == pytest.approx([0.0, 1.0])
+
+
+# ---------------------------------------------------------------------------
+# batch_get
+# ---------------------------------------------------------------------------
+
+
+def test_batch_get_returns_objects_in_input_order(store):
+    store.register_vector_field("v", dim=2)
+    for oid, n in [("a", 1), ("b", 2), ("c", 3)]:
+        store.add(oid, properties={"n": n}, vectors={"v": [float(n), 0.0]})
+    hits = store.batch_get(["c", "a", "b"])
+    assert [h.object_id for h in hits] == ["c", "a", "b"]
+    assert [h.properties["n"] for h in hits] == [3, 1, 2]
+
+
+def test_batch_get_missing_ids_yield_none(store):
+    store.add("a", properties={"n": 1})
+    hits = store.batch_get(["a", "ghost", "a"])
+    assert hits[0].object_id == "a"
+    assert hits[1] is None
+    assert hits[2].object_id == "a"
+
+
+def test_batch_get_empty_input_returns_empty_list(store):
+    store.add("a", properties={"n": 1})
+    assert store.batch_get([]) == []
+
+
+def test_batch_get_all_missing_returns_all_none(store):
+    assert store.batch_get(["x", "y"]) == [None, None]
+
+
+def test_batch_get_accepts_iterable(store):
+    store.add("a", properties={"n": 1})
+    store.add("b", properties={"n": 2})
+    hits = store.batch_get(iter(["a", "b"]))
+    assert [h.object_id for h in hits] == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# Scalar index on object_id (auto-created)
+# ---------------------------------------------------------------------------
+
+
+def test_object_id_scalar_index_is_auto_created(store):
+    # The index exists immediately after the Collection is constructed, even
+    # before any rows are added — we create it on table bootstrap so lookups
+    # are O(log N) from the first write onwards.
+    indices = store._backend._table.list_indices()
+    assert any(getattr(i, "columns", None) == ["object_id"] for i in indices)
+
+
+def test_object_id_scalar_index_survives_reopen(tmp_path):
+    from object_vectordb import ObjectVectorDB
+
+    uri = str(tmp_path / "db")
+    col = ObjectVectorDB(uri=uri).collection("c")
+    col.add("a", properties={"n": 1})
+    # Reopen — the index should already exist (and _ensure_object_id_index
+    # should no-op rather than duplicate).
+    col2 = ObjectVectorDB(uri=uri).collection("c")
+    indices = col2._backend._table.list_indices()
+    matches = [i for i in indices if getattr(i, "columns", None) == ["object_id"]]
+    assert len(matches) == 1

@@ -120,6 +120,12 @@ at search time. If a field has an index and `search()` is called with a
 different metric, the library raises `MetricMismatch` — LanceDB silently uses
 the index's metric in that case, so we surface it as a hard error.
 
+For neighborhood queries ("every object within distance D", deduplication,
+"similar but not identical") use
+[`search_within`](api.md#search_within) instead of top-k `search`. Pass
+`exact=True` when completeness matters, since radius queries against an
+IVF index are approximate by default.
+
 ## Merge-update semantics
 
 `update()` only touches the fields you specify:
@@ -163,7 +169,7 @@ store.rename_field("text_openai", "text_oai_v1")     # zero-copy (+ index rebuil
 
 ## Filter syntax
 
-The `where=` parameter on `search()`, `list()`, and `export_vectors()` is a
+The `where=` parameter on `search()`, `list_objects()`, and `export_vectors()` is a
 **DataFusion SQL** expression. See [filters.md](filters.md) for the full
 reference and examples.
 

@@ -20,7 +20,7 @@ def test_close_and_reopen(tmp_path):
     obj = c2.get("x")
     assert obj.properties["title"] == "hello"
     assert obj.vectors["v"] == pytest.approx([1.0, 2.0, 3.0])
-    fields = {f.name: f for f in c2.vector_fields()}
+    fields = {f.name: f for f in c2.list_vector_fields()}
     assert "v" in fields
     assert fields["v"].dim == 3
     assert fields["v"].description == "my vecs"

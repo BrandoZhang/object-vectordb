@@ -198,6 +198,11 @@ non-None value first, then you can subsequently clear that column.
   rows. `add()` does a pre-check with `count_rows("object_id = 'x'")` and
   raises `DuplicateObject` if the id exists. This is race-prone in a
   multi-writer world — documented as single-writer.
+- **`object_id` scalar index is auto-created.** Without an index on
+  `object_id`, every `get` / `exists` / `delete` / per-row existence pre-
+  check runs a full table scan (O(N)), and per-row batch checks are O(N²).
+  `_ensure_table` calls `create_scalar_index("object_id", index_type="BTREE")`
+  at bootstrap — idempotent, and migrates pre-index tables on first open.
 - **`update` is silent on empty match.** `table.update(where=...)` affects 0
   rows without complaint. `ObjectVectorDB.update()` pre-checks existence and
   raises `ObjectNotFound`.
@@ -219,7 +224,7 @@ non-None value first, then you can subsequently clear that column.
   implementation-defined, and our column-signature grouping would split such
   rows into separate groups with unreliable apply-order. `batch_update`
   therefore raises `DuplicateObject` on an intra-batch duplicate, mirroring
-  `add_many`'s behavior.
+  `batch_add`'s behavior.
 
 ## Score conversion
 
@@ -309,6 +314,24 @@ store.update("x", vectors={"image_clip": None})
    `__vec_*` columns from the properties dict, optionally filter to the
    caller's `select` list, compute `score = distance_to_score(distance, metric)`,
    wrap in `SearchResult`.
+
+### Radius search (`search_within`)
+
+`search_within(query, field, max_distance, min_distance=..., exact=...)`
+reuses the same validation / metric-resolution / row-materialization helpers
+(`_prepare_vector_query`, `_row_to_result`) as `search`. The difference is the
+builder chain: it calls `builder.distance_range(lower, upper)` so filtering
+happens **inside LanceDB** — no Python post-filter, no over-fetch. The lower
+bound is passed as `None` (not `0.0`) when the caller omits `min_distance`
+so that negative distances produced by `metric="dot"` are not silently
+excluded. `limit=None` becomes a sentinel `2**31 - 1` because the LanceDB
+builder requires a limit.
+
+Radius queries against an IVF index are approximate (matches in unprobed
+partitions are missed); `exact=True` calls `builder.bypass_vector_index()` to
+force a full scan when completeness matters more than latency. `search`
+tolerates approximation naturally (it still returns `k` results); radius
+queries do not — hence the first-class `exact` knob on `search_within` only.
 
 ## RRF (Reciprocal Rank Fusion)
 

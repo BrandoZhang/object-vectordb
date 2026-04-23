@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from object_vectordb import Collection, ObjectVectorDB
+from object_vectordb import Collection, ObjectAdd, ObjectVectorDB
 
 DEFAULT_DIM = 128
 SEED = 42
@@ -37,20 +37,20 @@ def _seed_collection(
 ) -> None:
     collection.register_vector_field(field, dim=dim)
     vectors = random_vectors(n, dim)
-    # Batch inserts via add_many for speed. Chunks of 5 000 rows keep pyarrow
+    # Batch inserts via batch_add for speed. Chunks of 5 000 rows keep pyarrow
     # RecordBatch sizes reasonable.
     chunk = 5000
     for start in range(0, n, chunk):
         end = min(start + chunk, n)
         items = [
-            {
-                "object_id": f"obj_{i:08d}",
-                "properties": {"bucket": i % 10, "tag": f"t{i % 100}"},
-                "vectors": {field: vectors[i].tolist()},
-            }
+            ObjectAdd(
+                object_id=f"obj_{i:08d}",
+                properties={"bucket": i % 10, "tag": f"t{i % 100}"},
+                vectors={field: vectors[i].tolist()},
+            )
             for i in range(start, end)
         ]
-        collection.add_many(items)
+        collection.batch_add(items)
     if with_index and n >= 256:
         # num_partitions must be <= n / some threshold. Use 16 for small N,
         # scale roughly with sqrt(n) for larger.

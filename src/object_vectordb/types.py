@@ -45,8 +45,22 @@ class SearchResult:
 
 
 @dataclass
+class ObjectAdd:
+    """Batch-insert entry for `Collection.batch_add()`.
+
+    Fields mirror the arguments of `Collection.add()`. Structurally identical to
+    `ObjectUpdate` but kept as a distinct type so call sites read as "adds" vs.
+    "updates" and so future divergence (e.g. `add`-only fields) is non-breaking.
+    """
+
+    object_id: str
+    properties: dict[str, Any] | None = None
+    vectors: dict[str, list[float] | None] | None = None
+
+
+@dataclass
 class ObjectUpdate:
-    """Batch-update entry for `ObjectVectorDB.batch_update()`."""
+    """Batch-update entry for `Collection.batch_update()`."""
 
     object_id: str
     properties: dict[str, Any] | None = None

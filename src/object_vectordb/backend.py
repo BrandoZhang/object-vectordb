@@ -9,6 +9,7 @@ in `db.py`.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable
 from typing import Any
 
@@ -44,6 +45,9 @@ log = logging.getLogger(__name__)
 
 OBJECT_ID_COLUMN = "object_id"
 DEFAULT_METRIC = "cosine"
+# LanceDB's builder requires a limit; this sentinel is used when the public API
+# says "unbounded" (search_within with limit=None).
+_UNBOUNDED_LIMIT = 2**31 - 1
 
 
 def _quote_literal(value: str) -> str:
@@ -73,9 +77,25 @@ class LanceDBBackend:
 
     def _ensure_table(self):
         if self._table_name in self._db.table_names():
-            return self._db.open_table(self._table_name)
-        schema = pa.schema([pa.field(OBJECT_ID_COLUMN, pa.string(), nullable=False)])
-        return self._db.create_table(self._table_name, schema=schema)
+            table = self._db.open_table(self._table_name)
+        else:
+            schema = pa.schema([pa.field(OBJECT_ID_COLUMN, pa.string(), nullable=False)])
+            table = self._db.create_table(self._table_name, schema=schema)
+        self._ensure_object_id_index(table)
+        return table
+
+    @staticmethod
+    def _ensure_object_id_index(table) -> None:
+        # BTREE on object_id turns every per-row existence check and id lookup
+        # from O(N) scans into O(log N). add / update / get / exists / delete
+        # and the per-row duplicate pre-check in batch_add / batch_update all
+        # rely on `where object_id = 'x'` and pay O(N) without this index.
+        # `create_scalar_index` is idempotent in LanceDB, so this is safe on
+        # repeated table opens and on tables migrated from pre-index builds.
+        for idx in table.list_indices():
+            if getattr(idx, "columns", None) == [OBJECT_ID_COLUMN]:
+                return
+        table.create_scalar_index(OBJECT_ID_COLUMN, index_type="BTREE")
 
     def _table_columns(self) -> set[str]:
         return set(self._table.schema.names)
@@ -241,7 +261,7 @@ class LanceDBBackend:
         # of the same id (single-writer, but defensive).
         self._table.merge_insert(OBJECT_ID_COLUMN).when_not_matched_insert_all().execute(table)
 
-    def add_many(
+    def batch_add(
         self,
         items: list[dict[str, Any]],
     ) -> None:
@@ -270,6 +290,29 @@ class LanceDBBackend:
         if not results:
             return None
         return self._row_to_object_dict(results[0])
+
+    def batch_get(self, object_ids: list[str]) -> list[dict[str, Any] | None]:
+        """Fetch multiple objects in one scan.
+
+        Returns a list aligned to `object_ids`: each position is either the
+        matching object dict or `None` if that id is absent. Duplicate input
+        ids return the same object at each position.
+        """
+        if not object_ids:
+            return []
+        # One scan for the union; re-align to input order (including duplicates).
+        unique = list(dict.fromkeys(object_ids))
+        in_list = ", ".join(_quote_literal(oid) for oid in unique)
+        rows = (
+            self._table.search()
+            .where(f"{OBJECT_ID_COLUMN} IN ({in_list})", prefilter=True)
+            .limit(len(unique))
+            .to_list()
+        )
+        by_id: dict[str, dict[str, Any]] = {
+            row[OBJECT_ID_COLUMN]: self._row_to_object_dict(row) for row in rows
+        }
+        return [by_id.get(oid) for oid in object_ids]
 
     def _row_to_object_dict(self, row: dict[str, Any]) -> dict[str, Any]:
         properties: dict[str, Any] = {}
@@ -344,7 +387,7 @@ class LanceDBBackend:
             object_id = upd["object_id"]
             # LanceDB's merge_insert against multiple source rows sharing a key is
             # implementation-defined, and splitting rows across signature groups
-            # makes apply-order unreliable. Match add_many's behavior and reject.
+            # makes apply-order unreliable. Match batch_add's behavior and reject.
             if object_id in seen:
                 raise DuplicateObject(object_id)
             seen.add(object_id)
@@ -535,22 +578,7 @@ class LanceDBBackend:
         nprobes: int | None = None,
         refine_factor: int | None = None,
     ) -> list[SearchResult]:
-        if query_vector is None or len(query_vector) == 0:
-            raise ValueError("search() requires a non-empty query_vector.")
-        rec = self._registry.get_vector(vector_field)
-        if rec is None:
-            raise VectorFieldNotRegistered(vector_field)
-        if len(query_vector) != rec.dim:
-            raise DimensionMismatch(vector_field, rec.dim, len(query_vector))
-
-        effective_metric = normalize_metric(metric) if metric else None
-        if rec.index and rec.index.get("metric"):
-            index_metric = rec.index["metric"]
-            if effective_metric is not None and effective_metric != index_metric:
-                raise MetricMismatch(vector_field, effective_metric, index_metric)
-            effective_metric = index_metric
-        if effective_metric is None:
-            effective_metric = DEFAULT_METRIC
+        rec, effective_metric = self._prepare_vector_query(query_vector, vector_field, metric)
 
         builder = self._table.search(query_vector, vector_column_name=rec.column)
         builder = builder.distance_type(effective_metric)
@@ -566,24 +594,113 @@ class LanceDBBackend:
             builder = builder.refine_factor(refine_factor)
         rows = builder.to_list()
 
-        results: list[SearchResult] = []
-        for row in rows:
-            distance = row.pop("_distance")
-            object_id = row.pop(OBJECT_ID_COLUMN)
-            # Filter to requested properties; strip internal vector columns and _rowid, _score.
-            row.pop("_rowid", None)
-            row.pop("_score", None)
-            properties = {k: v for k, v in row.items() if not k.startswith(VECTOR_COLUMN_PREFIX)}
-            if select is not None:
-                properties = {k: v for k, v in properties.items() if k in set(select)}
-            results.append(
-                SearchResult(
-                    object_id=object_id,
-                    score=distance_to_score(distance, effective_metric),
-                    properties=properties,
+        return [self._row_to_result(row, effective_metric, select) for row in rows]
+
+    def search_within(
+        self,
+        query_vector: list[float],
+        vector_field: str,
+        max_distance: float,
+        min_distance: float | None = None,
+        limit: int | None = None,
+        metric: str | None = None,
+        where: str | None = None,
+        select: list[str] | None = None,
+        nprobes: int | None = None,
+        refine_factor: int | None = None,
+        exact: bool = False,
+    ) -> list[SearchResult]:
+        self._validate_distance_bounds(min_distance, max_distance)
+        rec, effective_metric = self._prepare_vector_query(query_vector, vector_field, metric)
+
+        # Pass lower_bound=None (not 0.0) when the caller did not specify one:
+        # for metric="dot" the LanceDB distance is `1 - dot(q,v)` and can be
+        # negative, so a 0.0 floor would silently drop valid matches.
+        lower = None if min_distance is None else float(min_distance)
+        upper = float(max_distance)
+
+        builder = self._table.search(query_vector, vector_column_name=rec.column)
+        builder = builder.distance_type(effective_metric)
+        builder = builder.distance_range(lower, upper)
+        if exact:
+            builder = builder.bypass_vector_index()
+        if where:
+            builder = builder.where(where, prefilter=True)
+        if select:
+            user_select = list(dict.fromkeys([OBJECT_ID_COLUMN, *select]))
+            builder = builder.select(user_select)
+        # LanceDB requires a limit; None means "unbounded" at our API boundary.
+        builder = builder.limit(_UNBOUNDED_LIMIT if limit is None else int(limit))
+        if nprobes is not None:
+            builder = builder.nprobes(nprobes)
+        if refine_factor is not None:
+            builder = builder.refine_factor(refine_factor)
+        rows = builder.to_list()
+
+        return [self._row_to_result(row, effective_metric, select) for row in rows]
+
+    def _prepare_vector_query(
+        self,
+        query_vector: list[float],
+        vector_field: str,
+        metric: str | None,
+    ) -> tuple[VectorFieldRecord, str]:
+        """Validate inputs and resolve the effective metric for a vector query."""
+        if query_vector is None or len(query_vector) == 0:
+            raise ValueError("Vector query requires a non-empty query_vector.")
+        rec = self._registry.get_vector(vector_field)
+        if rec is None:
+            raise VectorFieldNotRegistered(vector_field)
+        if len(query_vector) != rec.dim:
+            raise DimensionMismatch(vector_field, rec.dim, len(query_vector))
+
+        effective_metric = normalize_metric(metric) if metric else None
+        if rec.index and rec.index.get("metric"):
+            index_metric = rec.index["metric"]
+            if effective_metric is not None and effective_metric != index_metric:
+                raise MetricMismatch(vector_field, effective_metric, index_metric)
+            effective_metric = index_metric
+        if effective_metric is None:
+            effective_metric = DEFAULT_METRIC
+        return rec, effective_metric
+
+    @staticmethod
+    def _validate_distance_bounds(min_distance: float | None, max_distance: float) -> None:
+        if max_distance is None:
+            raise ValueError("search_within() requires max_distance.")
+        # Negative `max_distance` is allowed for metric="dot" (LanceDB distance
+        # is `1 - dot` and can be negative). For cosine/l2 a non-positive bound
+        # will simply return an empty result — caller's responsibility.
+        if not math.isfinite(max_distance):
+            raise ValueError(f"max_distance must be a finite number, got {max_distance!r}.")
+        if min_distance is not None:
+            if not math.isfinite(min_distance):
+                raise ValueError(f"min_distance must be a finite number, got {min_distance!r}.")
+            if min_distance >= max_distance:
+                raise ValueError(
+                    f"min_distance ({min_distance}) must be strictly less than "
+                    f"max_distance ({max_distance})."
                 )
-            )
-        return results
+
+    @staticmethod
+    def _row_to_result(
+        row: dict[str, Any],
+        effective_metric: str,
+        select: list[str] | None,
+    ) -> SearchResult:
+        distance = row.pop("_distance")
+        object_id = row.pop(OBJECT_ID_COLUMN)
+        # Filter to requested properties; strip internal vector columns and _rowid, _score.
+        row.pop("_rowid", None)
+        row.pop("_score", None)
+        properties = {k: v for k, v in row.items() if not k.startswith(VECTOR_COLUMN_PREFIX)}
+        if select is not None:
+            properties = {k: v for k, v in properties.items() if k in set(select)}
+        return SearchResult(
+            object_id=object_id,
+            score=distance_to_score(distance, effective_metric),
+            properties=properties,
+        )
 
     # ------------------------------------------------------------------
     # Index management

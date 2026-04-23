@@ -46,8 +46,8 @@ def test_vector_fields_isolated_across_collections(db):
     videos.register_vector_field("clip", dim=3)
     images.register_vector_field("siglip", dim=4)
 
-    videos_fields = {f.name for f in videos.vector_fields()}
-    images_fields = {f.name for f in images.vector_fields()}
+    videos_fields = {f.name for f in videos.list_vector_fields()}
+    images_fields = {f.name for f in images.list_vector_fields()}
 
     assert videos_fields == {"clip"}
     assert images_fields == {"siglip"}
@@ -94,8 +94,8 @@ def test_reopen_roundtrips_collections(tmp_path):
     assert set(db2.list_collections()) == {"a", "b"}
     a2 = db2.collection("a")
     b2 = db2.collection("b")
-    assert [f.name for f in a2.vector_fields()] == ["v"]
-    assert [f.name for f in b2.vector_fields()] == ["w"]
+    assert [f.name for f in a2.list_vector_fields()] == ["v"]
+    assert [f.name for f in b2.list_vector_fields()] == ["w"]
     assert a2.get("x").vectors["v"] == pytest.approx([1.0, 2.0, 3.0])
 
 

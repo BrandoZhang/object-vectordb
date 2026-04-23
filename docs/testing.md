@@ -19,7 +19,7 @@ tests/
 ├── conftest.py               # tmp_path-based `store` fixture
 ├── test_lifecycle.py         # add / get / exists / delete / duplicate detection
 ├── test_update.py            # merge semantics + null-clear round-trip (the v1 gates)
-├── test_batch.py             # add_many, batch_update across mixed column sets
+├── test_batch.py             # batch_add, batch_update across mixed column sets
 ├── test_vector_fields.py     # register, dim enforcement, drop, rename, reserved-prefix
 ├── test_schema.py            # schema() shape, auto-add per Python type
 ├── test_search.py            # per-metric calibration, where, select, metric mismatch

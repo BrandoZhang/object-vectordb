@@ -105,10 +105,10 @@ Returns a `VectorFieldInfo` describing the registered field.
 
 ---
 
-### `vector_fields`
+### `list_vector_fields`
 
 ```python
-vector_fields() -> list[VectorFieldInfo]
+list_vector_fields() -> list[VectorFieldInfo]
 ```
 
 Lists all registered vector fields and their current state (dim, whether an
@@ -139,15 +139,16 @@ Inserts a new object. Raises `DuplicateObject` if `object_id` already exists.
 
 ---
 
-### `add_many`
+### `batch_add`
 
 ```python
-add_many(items: list[dict[str, Any]]) -> None
+batch_add(items: Iterable[ObjectAdd]) -> None
 ```
 
-Bulk insert. Each item is a dict with keys `object_id`, `properties?`,
-`vectors?`. Same validation as `add()`. Raises `DuplicateObject` if any id
-already exists in the table or appears twice in the batch.
+Bulk insert. Each item is an [`ObjectAdd`](#objectadd) with fields
+`object_id`, `properties?`, `vectors?` — same shape and validation as
+`add()`. Raises `DuplicateObject` if any id already exists in the table
+or appears twice in the batch.
 
 ---
 
@@ -160,6 +161,20 @@ get(object_id: str) -> ObjectData | None
 Returns the full object including all properties and all registered vectors
 (vectors not set on this object return as `None`). Returns `None` if the
 object does not exist.
+
+---
+
+### `batch_get`
+
+```python
+batch_get(object_ids: Iterable[str]) -> list[ObjectData | None]
+```
+
+Fetch multiple objects in a single scan. Returns a list aligned to the
+input order; each position is either the matching `ObjectData` or `None`
+if that id is absent. Duplicate input ids return the same object at each
+position. Empty input returns `[]`. Much cheaper than N calls to `get()`
+because it runs one `where object_id IN (...)` scan instead of N.
 
 ---
 
@@ -208,6 +223,24 @@ Merge-update: only the specified fields are touched.
   - `"insert"`: upsert. If the row is missing, a partial row containing
     only the touched columns is inserted (other columns are null).
   - `"skip"`: silently no-op when the row is missing.
+
+---
+
+### `upsert`
+
+```python
+upsert(
+    object_id: str,
+    properties: dict[str, Any] | None = None,
+    vectors: dict[str, list[float] | None] | None = None,
+) -> None
+```
+
+Insert if missing, merge-update if present. Equivalent to
+`update(object_id, ..., on_missing="insert")` but named for the common case.
+Semantics are **merge, not replace**: unspecified fields on an existing row
+are preserved, and missing rows are created as partial rows containing only
+the fields you passed.
 
 ---
 
@@ -322,6 +355,58 @@ Raises:
 
 ---
 
+### `search_within`
+
+```python
+search_within(
+    query_vector: list[float] | np.ndarray,
+    vector_field: str,
+    max_distance: float,
+    *,
+    min_distance: float | None = None,
+    limit: int | None = None,
+    metric: str | None = None,
+    where: str | None = None,
+    select: list[str] | None = None,
+    nprobes: int | None = None,
+    refine_factor: int | None = None,
+    exact: bool = False,
+) -> list[SearchResult]
+```
+
+Radius (distance-bounded) vector search. Returns every object whose
+distance from `query_vector` lies in the half-open interval
+`[min_distance or 0.0, max_distance)`. Results are sorted by ascending
+distance (= descending `SearchResult.score`), matching `search()`.
+
+- `max_distance` is in LanceDB's **native distance space** for the resolved
+  metric (not the similarity score). Conversion table:
+
+  | metric   | distance formula          | `max_distance` for `min_score` `s`    |
+  | -------- | ------------------------- | ------------------------------------- |
+  | `cosine` | `1 - cos_sim`             | `1 - s`                               |
+  | `l2`     | squared Euclidean         | `(1 / s) - 1` (since `score = 1/(1+d)`) |
+  | `dot`    | `1 - dot(q, v)`           | `1 - s` (score equals raw dot)        |
+
+  `dot` distances can be negative (when `dot > 1`); `min_distance` must also
+  be negative in that case. `cosine` distances lie in `[0, 2]`; `l2` in
+  `[0, ∞)`.
+- `limit=None` means unbounded. Other filter/projection args behave exactly
+  as in `search()`.
+- `exact=True` bypasses the ANN index for this query so the scan is
+  guaranteed to find every match. **Radius queries against an IVF index are
+  approximate** — matches in unprobed partitions are silently missed. Pass
+  `exact=True` when completeness matters more than latency.
+- Composes with `rrf_merge` unchanged (results are still rank-ordered).
+
+Raises:
+
+- `ValueError` if `query_vector` is empty, `max_distance` is `NaN`/`±inf`,
+  `min_distance` is `NaN`/`±inf`, or `min_distance >= max_distance`.
+- `VectorFieldNotRegistered` if `vector_field` is unknown.
+- `DimensionMismatch` if `len(query_vector) != dim`.
+- `MetricMismatch` on an index/metric conflict.
+
 ---
 
 ## Module-level: `rrf_merge`
@@ -423,10 +508,10 @@ array.
 
 ---
 
-### `list`
+### `list_objects`
 
 ```python
-list(
+list_objects(
     where: str | None = None,
     select: list[str] | None = None,
     limit: int | None = None,
@@ -485,6 +570,18 @@ class SearchResult:
 See [architecture.md § score conversion](architecture.md#score-conversion)
 for how `score` is derived per metric.
 
+### `ObjectAdd`
+
+Input to `batch_add()`. Fields mirror the arguments of `add()`.
+
+```python
+@dataclass
+class ObjectAdd:
+    object_id: str
+    properties: dict[str, Any] | None = None
+    vectors: dict[str, list[float] | None] | None = None
+```
+
 ### `ObjectUpdate`
 
 Input to `batch_update()`.
@@ -499,7 +596,7 @@ class ObjectUpdate:
 
 ### `VectorFieldInfo`
 
-Returned by `vector_fields()` and `register_vector_field()`.
+Returned by `list_vector_fields()` and `register_vector_field()`.
 
 ```python
 @dataclass
@@ -534,7 +631,7 @@ compatibility with dict-style callers.
 | Exception                 | Raised by                                                                                      |
 | ------------------------- | ---------------------------------------------------------------------------------------------- |
 | `ObjectNotFound`          | `update`, `batch_update` when `object_id` does not exist.                                      |
-| `DuplicateObject`         | `add`, `add_many` when `object_id` already exists (or is duplicated in the batch).             |
+| `DuplicateObject`         | `add`, `batch_add` when `object_id` already exists (or is duplicated in the batch).             |
 | `VectorFieldNotRegistered`| `search`, `export_vectors`, `create_index`, `drop_index`, `rebuild_index` on unknown field.    |
 | `DimensionMismatch`       | Any write or search where vector length ≠ registered dim.                                      |
 | `SchemaError`             | Reserved-prefix property names, None-typed new columns, rename/drop conflicts, etc.            |
