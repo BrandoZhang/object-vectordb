@@ -137,21 +137,35 @@ class LanceDBBackend:
     def _ensure_object_id_index(table, required: bool = False) -> None:
         # BTREE on object_id turns every per-row existence check and id lookup
         # from O(N) scans into O(log N).
-        for idx in table.list_indices():
-            if getattr(idx, "columns", None) == [OBJECT_ID_COLUMN]:
-                return
+        if LanceDBBackend._has_object_id_index(table):
+            return
         try:
             _with_retry(table.create_scalar_index, OBJECT_ID_COLUMN, index_type="BTREE")
+            return
         except Exception as exc:
-            # A concurrent writer just created the same index — always treat as
-            # success, even when required=True: the end state is what we wanted.
+            # A concurrent writer just created the same index — success.
             if _is_already_exists(exc):
                 return
-            # Other failures (read-only credentials, transient errors) are only
-            # fatal when we just created the table and genuinely need the index.
+            # Retry-exhausted "Incompatible transaction: CreateIndex ...
+            # concurrent" or a transient failure.  If the index now exists
+            # (because the concurrent writer's CreateIndex won the commit
+            # race), treat it as success regardless of `required`: the end
+            # state matches our intent.
+            if LanceDBBackend._has_object_id_index(table):
+                return
+            # Other failures (read-only credentials, unrelated errors) are
+            # only fatal when we just created the table and genuinely need
+            # the index.
             if required:
                 raise
             log.debug("Could not create object_id BTREE index (non-fatal): %s", exc)
+
+    @staticmethod
+    def _has_object_id_index(table) -> bool:
+        for idx in table.list_indices():
+            if getattr(idx, "columns", None) == [OBJECT_ID_COLUMN]:
+                return True
+        return False
 
     def _table_columns(self) -> set[str]:
         return set(self._table.schema.names)
