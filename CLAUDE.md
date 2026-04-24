@@ -23,7 +23,7 @@ uv run pytest benches/ --benchmark-only -m "not full"   # quick benchmark tier (
 uv run pytest benches/ --benchmark-only -m full         # spec-scale benchmarks (~5–10 min)
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, a pytest matrix over Python 3.10/3.11/3.12, and a build on every PR and push to `main`. Keep the `ruff format --check` gate green — run `uv run ruff format src tests` before committing.
+CI (`.github/workflows/ci.yml`) runs lint, a pytest matrix over Python 3.10/3.11/3.12, and a build on every PR and push to `main`. Keep the `ruff format --check` gate green — run `uv run ruff format src tests benches` before committing.
 
 ## Architecture — the layering rule
 

@@ -1,6 +1,6 @@
 """pyarrow helpers: Python value -> Arrow type inference, record-batch construction.
 
-Kept in a separate module so that `store.py` stays free of pyarrow imports.
+Kept in a separate module so that `db.py` and `collection.py` stay free of pyarrow imports.
 """
 
 from __future__ import annotations

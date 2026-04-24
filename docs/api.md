@@ -5,7 +5,7 @@ All public names are re-exported from the top-level `object_vectordb` package.
 ```python
 from object_vectordb import (
     ObjectVectorDB, Collection, rrf_merge,
-    ObjectData, ObjectUpdate, SearchResult, VectorFieldInfo, IndexInfo,
+    ObjectAdd, ObjectData, ObjectUpdate, SearchResult, VectorFieldInfo, IndexInfo,
     ObjectVectorDBError,
     ObjectNotFound, DuplicateObject, VectorFieldNotRegistered,
     DimensionMismatch, SchemaError, MetricMismatch,
@@ -58,8 +58,9 @@ columns are added later via `register_vector_field` and the first write.
 list_collections() -> list[str]
 ```
 
-Collection names registered at this URI, intersected with the Lance tables
-actually present on disk. Sorted alphabetically.
+Collection names at this URI — Lance tables that carry the ovdb sentinel
+on their `object_id` field. Foreign Lance tables dropped into the same
+URI are excluded. Sorted alphabetically.
 
 ---
 
@@ -69,7 +70,8 @@ actually present on disk. Sorted alphabetically.
 has_collection(name: str) -> bool
 ```
 
-`True` iff the Lance table and the registry entry both exist.
+`True` iff a Lance table named `name` exists at this URI and carries the
+ovdb sentinel on its `object_id` field.
 
 ---
 
@@ -79,8 +81,9 @@ has_collection(name: str) -> bool
 drop_collection(name: str) -> None
 ```
 
-Delete the Lance table and its registry entry. Silent no-op if the
-collection doesn't exist.
+Delete the Lance table. Silent no-op if the collection doesn't exist.
+Since all collection metadata lives in the Lance manifest, dropping the
+table drops every associated registration.
 
 ---
 
@@ -540,7 +543,7 @@ implicitly on writes; invoke periodically after large batches (e.g. every
 
 ### `ObjectData`
 
-Returned by `get()` and `list()`.
+Returned by `get()`, `batch_get()`, and `list_objects()`.
 
 ```python
 @dataclass

@@ -85,7 +85,7 @@ ids, embeddings = media.export_vectors("text_openai", where="views > 1000")
 # DB-level collection management
 db.list_collections()            # ["media", "notes"]
 db.has_collection("media")       # True
-db.drop_collection("notes")      # deletes the Lance table + registry entry
+db.drop_collection("notes")      # deletes the Lance table
 ```
 
 ## Filter syntax

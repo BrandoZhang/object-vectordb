@@ -27,8 +27,10 @@ tests/
 ├── test_rrf.py               # rrf_merge determinism, k parameter, limit, tie-breaking
 ├── test_index.py             # create / rebuild / drop / index_info round-trip
 ├── test_export.py            # export_vectors aligned shapes, null skipping, where filter
-├── test_list.py              # list() pagination + filters
-└── test_persistence.py       # close + reopen preserves data, schema, and indices
+├── test_list.py              # list_objects() pagination + filters
+├── test_persistence.py       # close + reopen preserves data, schema, and indices
+├── test_multiwriter.py       # concurrent writers; Lance commit-conflict retries
+└── test_registry.py          # sentinel detection + Arrow-metadata round-trip
 ```
 
 ## Gate tests (must pass before v1 is "done")

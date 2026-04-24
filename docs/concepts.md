@@ -31,7 +31,7 @@ to:
 ```python
 db.list_collections()        # ["images", "videos"]
 db.has_collection("videos")  # True
-db.drop_collection("images") # deletes the underlying Lance table + registry entry
+db.drop_collection("images") # deletes the Lance table
 ```
 
 ## Object
