@@ -1,0 +1,50 @@
+# Changelog
+
+## 0.2.0 (2026-04-24)
+
+### Breaking changes
+
+- **`on_missing` removed from `update()` and `batch_update()`.**
+  `update()` now always raises `ObjectNotFound` when the target id is absent;
+  there is no silent skip or implicit insert path.
+  Use `upsert()` for insert-if-missing semantics.
+
+- **Registry format: JSON sidecar → Arrow field metadata.**
+  Vector field records (dim, description, index config) are now stored in the
+  Arrow field metadata of each `__vec_<name>` column inside the Lance manifest.
+  The old `object_vectordb_registry.json` sidecar is auto-migrated on first open
+  of an existing URI and then deleted.  There is no manual migration step.
+
+- **`OnMissing` type removed** from `object_vectordb.types` and from the public
+  `__all__` export.
+
+### New features
+
+- **Multi-writer support.**
+  - `add()` and `batch_add()` use `MergeResult.num_inserted_rows` instead of a
+    pre-check `count_rows` query to detect duplicate ids.  No TOCTOU window.
+  - `update()` uses `MergeResult.num_updated_rows` (and `UpdateResult.rows_updated`
+    for null-scalar clears) to detect missing rows.  No TOCTOU window.
+  - `batch_update()` performs a single batch existence check (one `IN (...)` query
+    for all ids) instead of N per-row `exists()` calls.
+  - Schema mutations (`register_vector_field`, `set_index`, `drop_fields`,
+    `rename_field`, `create_index`) use `_with_retry` to handle Lance manifest
+    commit conflicts with bounded exponential backoff (5 attempts, 50–800 ms).
+  - Concurrent `add_columns` calls for the same column name are idempotent
+    ("column already exists" errors are swallowed).
+
+- **`upsert()` remains the only insert-if-missing path.**
+  Callers that previously used `update(..., on_missing="insert")` should switch to
+  `upsert()`.  Merge semantics are unchanged: existing fields not in the call are
+  preserved; missing rows are inserted as partial rows.
+
+### Notes
+
+- **`batch_update` is still not atomic across column-signature groups.**
+  A `batch_update` whose rows have differing column sets executes as N independent
+  `merge_insert` calls.  Each call is atomic and conflict-retried; the batch as a
+  whole is not.  For full atomicity, issue homogeneous batches (same columns for
+  every row).
+
+- **`lancedb` minimum version bumped to `0.30.0`** (`MergeResult` with named fields
+  is required).

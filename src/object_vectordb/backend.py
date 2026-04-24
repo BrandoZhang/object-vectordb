@@ -29,24 +29,21 @@ from .exceptions import (
     SchemaError,
     VectorFieldNotRegistered,
 )
-from .registry import VECTOR_COLUMN_PREFIX, CollectionRegistry, VectorFieldRecord
+from .registry import (
+    SCHEMA_SENTINEL_KEY,
+    SCHEMA_SENTINEL_VALUE,
+    VECTOR_COLUMN_PREFIX,
+    CollectionRegistry,
+    VectorFieldRecord,
+    _with_retry,
+)
 from .scoring import distance_to_score, normalize_metric
-from .types import IndexInfo, OnMissing, SearchResult, VectorFieldInfo
-
-_VALID_ON_MISSING: frozenset[str] = frozenset({"raise", "insert", "skip"})
-
-
-def _validate_on_missing(value: str) -> None:
-    if value not in _VALID_ON_MISSING:
-        raise ValueError(f"on_missing must be one of {sorted(_VALID_ON_MISSING)!r}, got {value!r}")
-
+from .types import IndexInfo, SearchResult, VectorFieldInfo
 
 log = logging.getLogger(__name__)
 
 OBJECT_ID_COLUMN = "object_id"
 DEFAULT_METRIC = "cosine"
-# LanceDB's builder requires a limit; this sentinel is used when the public API
-# says "unbounded" (search_within with limit=None).
 _UNBOUNDED_LIMIT = 2**31 - 1
 
 
@@ -70,6 +67,7 @@ class LanceDBBackend:
         self._registry = registry
         self._auto_register = auto_register
         self._table = self._ensure_table()
+        self._registry.bind_table(self._table)
 
     # ------------------------------------------------------------------
     # Table bootstrap
@@ -79,7 +77,10 @@ class LanceDBBackend:
         if self._table_name in self._db.table_names():
             table = self._db.open_table(self._table_name)
         else:
-            schema = pa.schema([pa.field(OBJECT_ID_COLUMN, pa.string(), nullable=False)])
+            sentinel_meta = {SCHEMA_SENTINEL_KEY.encode(): SCHEMA_SENTINEL_VALUE.encode()}
+            schema = pa.schema(
+                [pa.field(OBJECT_ID_COLUMN, pa.string(), nullable=False, metadata=sentinel_meta)]
+            )
             table = self._db.create_table(self._table_name, schema=schema)
         self._ensure_object_id_index(table)
         return table
@@ -87,11 +88,7 @@ class LanceDBBackend:
     @staticmethod
     def _ensure_object_id_index(table) -> None:
         # BTREE on object_id turns every per-row existence check and id lookup
-        # from O(N) scans into O(log N). add / update / get / exists / delete
-        # and the per-row duplicate pre-check in batch_add / batch_update all
-        # rely on `where object_id = 'x'` and pay O(N) without this index.
-        # `create_scalar_index` is idempotent in LanceDB, so this is safe on
-        # repeated table opens and on tables migrated from pre-index builds.
+        # from O(N) scans into O(log N).
         for idx in table.list_indices():
             if getattr(idx, "columns", None) == [OBJECT_ID_COLUMN]:
                 return
@@ -115,12 +112,14 @@ class LanceDBBackend:
                 f"Property name {name!r} uses reserved prefix {VECTOR_COLUMN_PREFIX!r}."
             )
         if name in self._table_columns():
-            if not self._registry.has_property(name):
-                self._registry.add_property(name)
             return
         dtype = python_value_to_arrow_type(sample)
-        self._table.add_columns(pa.field(name, dtype))
-        self._registry.add_property(name)
+        try:
+            _with_retry(self._table.add_columns, pa.field(name, dtype))
+        except RuntimeError as exc:
+            # Concurrent writer added the same column first — treat as success.
+            if "already exists" not in str(exc).lower():
+                raise
 
     def _ensure_vector_column(self, name: str, dim: int) -> VectorFieldRecord:
         column = self._registry.vector_column(name)
@@ -129,10 +128,12 @@ class LanceDBBackend:
             if existing.dim != dim:
                 raise DimensionMismatch(name, existing.dim, dim)
             return existing
-        if column in self._table_columns():
-            # Column exists in the lance table but not in the registry — re-register.
-            return self._registry.add_vector(name, dim)
-        self._table.add_columns(pa.field(column, pa.list_(pa.float32(), dim)))
+        if column not in self._table_columns():
+            try:
+                _with_retry(self._table.add_columns, pa.field(column, pa.list_(pa.float32(), dim)))
+            except RuntimeError as exc:
+                if "already exists" not in str(exc).lower():
+                    raise
         return self._registry.add_vector(name, dim)
 
     # ------------------------------------------------------------------
@@ -153,12 +154,16 @@ class LanceDBBackend:
             if existing.dim != dim:
                 raise DimensionMismatch(name, existing.dim, dim)
             if description is not None and existing.description != description:
-                existing.description = description
-                self._registry.set_index(name, existing.index)  # triggers save
+                self._registry.update_description(name, description)
+                existing = self._registry.get_vector(name)
             return self._vector_field_info(existing)
         column = self._registry.vector_column(name)
         if column not in self._table_columns():
-            self._table.add_columns(pa.field(column, pa.list_(pa.float32(), dim)))
+            try:
+                _with_retry(self._table.add_columns, pa.field(column, pa.list_(pa.float32(), dim)))
+            except RuntimeError as exc:
+                if "already exists" not in str(exc).lower():
+                    raise
         rec = self._registry.add_vector(name, dim, description)
         return self._vector_field_info(rec)
 
@@ -195,16 +200,10 @@ class LanceDBBackend:
         properties: dict[str, Any] | None,
         vectors: dict[str, list[float] | None] | None,
     ) -> dict[str, Any]:
-        """Build a row dict ready for pyarrow from the user's Python inputs.
-
-        - Ensures every property column exists (auto-add) and JSON-encodes dicts.
-        - Validates/auto-registers vector fields and maps names to __vec_ columns.
-        """
         row: dict[str, Any] = {OBJECT_ID_COLUMN: object_id}
         if properties:
             for key, value in properties.items():
                 if value is None:
-                    # Can't infer type; only allowed if column already exists
                     if key not in self._table_columns():
                         raise SchemaError(
                             f"Cannot add new property {key!r} with value=None "
@@ -221,11 +220,6 @@ class LanceDBBackend:
         return row
 
     def _batch_from_rows(self, rows: list[dict[str, Any]]) -> pa.Table:
-        """Build a pyarrow Table whose schema contains exactly the columns present in `rows`.
-
-        LanceDB's merge_insert accepts a subset of the target's columns as long as the key is
-        present; unspecified columns are preserved by when_matched_update_all.
-        """
         columns: dict[str, None] = {}
         for row in rows:
             for k in row:
@@ -247,19 +241,32 @@ class LanceDBBackend:
     def exists(self, object_id: str) -> bool:
         return self._table.count_rows(f"{OBJECT_ID_COLUMN} = {_quote_literal(object_id)}") > 0
 
+    def _find_missing_ids(self, ids: list[str]) -> list[str]:
+        """Return the subset of ids not present in the table (single scan)."""
+        in_list = ", ".join(_quote_literal(i) for i in ids)
+        rows = (
+            self._table.search()
+            .where(f"{OBJECT_ID_COLUMN} IN ({in_list})", prefilter=True)
+            .limit(len(ids))
+            .select([OBJECT_ID_COLUMN])
+            .to_list()
+        )
+        found = {r[OBJECT_ID_COLUMN] for r in rows}
+        return [i for i in ids if i not in found]
+
     def add(
         self,
         object_id: str,
         properties: dict[str, Any] | None,
         vectors: dict[str, list[float] | None] | None,
     ) -> None:
-        if self.exists(object_id):
-            raise DuplicateObject(object_id)
         row = self._prepare_row(object_id, properties, vectors)
         table = self._batch_from_rows([row])
-        # Use merge_insert with only-not-matched so we never clobber a concurrent write
-        # of the same id (single-writer, but defensive).
-        self._table.merge_insert(OBJECT_ID_COLUMN).when_not_matched_insert_all().execute(table)
+        result = (
+            self._table.merge_insert(OBJECT_ID_COLUMN).when_not_matched_insert_all().execute(table)
+        )
+        if result.num_inserted_rows == 0:
+            raise DuplicateObject(object_id)
 
     def batch_add(
         self,
@@ -274,11 +281,25 @@ class LanceDBBackend:
             if object_id in seen:
                 raise DuplicateObject(object_id)
             seen.add(object_id)
-            if self.exists(object_id):
-                raise DuplicateObject(object_id)
             rows.append(self._prepare_row(object_id, item.get("properties"), item.get("vectors")))
         table = self._batch_from_rows(rows)
-        self._table.merge_insert(OBJECT_ID_COLUMN).when_not_matched_insert_all().execute(table)
+        result = (
+            self._table.merge_insert(OBJECT_ID_COLUMN).when_not_matched_insert_all().execute(table)
+        )
+        if result.num_inserted_rows < len(rows):
+            # Some ids were already present; find which ones (error path only).
+            in_list = ", ".join(_quote_literal(i) for i in seen)
+            found_rows = (
+                self._table.search()
+                .where(f"{OBJECT_ID_COLUMN} IN ({in_list})", prefilter=True)
+                .limit(len(seen))
+                .select([OBJECT_ID_COLUMN])
+                .to_list()
+            )
+            found_ids = {r[OBJECT_ID_COLUMN] for r in found_rows}
+            pre_existing = [i for i in seen if i in found_ids]
+            if pre_existing:
+                raise DuplicateObject(pre_existing[0])
 
     def get(self, object_id: str) -> dict[str, Any] | None:
         results = (
@@ -292,15 +313,9 @@ class LanceDBBackend:
         return self._row_to_object_dict(results[0])
 
     def batch_get(self, object_ids: list[str]) -> list[dict[str, Any] | None]:
-        """Fetch multiple objects in one scan.
-
-        Returns a list aligned to `object_ids`: each position is either the
-        matching object dict or `None` if that id is absent. Duplicate input
-        ids return the same object at each position.
-        """
+        """Fetch multiple objects in one scan."""
         if not object_ids:
             return []
-        # One scan for the union; re-align to input order (including duplicates).
         unique = list(dict.fromkeys(object_ids))
         in_list = ", ".join(_quote_literal(oid) for oid in unique)
         rows = (
@@ -326,7 +341,6 @@ class LanceDBBackend:
             else:
                 arrow_type = self._column_type(key) if key in self._table_columns() else None
                 properties[key] = self._decode_property(value, arrow_type)
-        # Ensure all registered vector fields appear in the output (even if None).
         for rec in self._registry.list_vectors():
             vectors.setdefault(rec.name, None)
         return {
@@ -336,13 +350,10 @@ class LanceDBBackend:
         }
 
     def _decode_property(self, value: Any, arrow_type: pa.DataType | None) -> Any:
-        # We encode dicts as JSON strings on write. We don't know whether a given string
-        # column was originally a dict, so we leave decoding to the caller.
         return value
 
     def delete(self, object_id: str) -> None:
-        # LanceDB silently ignores non-matching deletes. Silent no-op on missing is the spec.
-        self._table.delete(f"{OBJECT_ID_COLUMN} = {_quote_literal(object_id)}")
+        _with_retry(self._table.delete, f"{OBJECT_ID_COLUMN} = {_quote_literal(object_id)}")
 
     # ------------------------------------------------------------------
     # Update / batch_update
@@ -353,49 +364,35 @@ class LanceDBBackend:
         object_id: str,
         properties: dict[str, Any] | None = None,
         vectors: dict[str, list[float] | None] | None = None,
-        on_missing: OnMissing = "raise",
+        *,
+        allow_insert: bool = False,
     ) -> None:
-        _validate_on_missing(on_missing)
-        if on_missing != "insert" and not self.exists(object_id):
-            if on_missing == "raise":
-                raise ObjectNotFound(object_id)
-            # on_missing == "skip"
-            return
-        self._apply_update(object_id, properties, vectors, allow_insert=on_missing == "insert")
+        self._apply_update(object_id, properties, vectors, allow_insert=allow_insert)
 
     def batch_update(
         self,
         updates: list[dict[str, Any]],
-        on_missing: OnMissing = "raise",
     ) -> None:
         """Apply a list of {object_id, properties?, vectors?} updates.
 
-        We build one merge_insert batch per call for rows with non-None property/vector writes,
-        then handle None-clears individually (they need per-column SQL casts or per-row null batches).
+        All ids must already exist in the table; raises ObjectNotFound for any
+        missing id (checked in one batch query before any writes).
 
-        `on_missing` controls behavior for ids not present in the table: "raise" (default)
-        raises `ObjectNotFound` on the first missing id; "skip" silently drops missing rows;
-        "insert" upserts (a partial row with only the touched columns is inserted).
+        A batch spanning rows with differing column signatures executes as N
+        independent merge_insert calls — each is atomic and conflict-retried;
+        the batch as a whole is not. For full atomicity, issue homogeneous batches
+        (same set of columns for every row).
         """
-        _validate_on_missing(on_missing)
         merge_rows: list[dict[str, Any]] = []
-        null_scalar_ops: list[tuple[str, str]] = []  # (object_id, property_name)
-        null_vector_ops: list[tuple[str, str]] = []  # (object_id, vector_name)
+        null_scalar_ops: list[tuple[str, str]] = []
+        null_vector_ops: list[tuple[str, str]] = []
 
         seen: set[str] = set()
         for upd in updates:
             object_id = upd["object_id"]
-            # LanceDB's merge_insert against multiple source rows sharing a key is
-            # implementation-defined, and splitting rows across signature groups
-            # makes apply-order unreliable. Match batch_add's behavior and reject.
             if object_id in seen:
                 raise DuplicateObject(object_id)
             seen.add(object_id)
-            if on_missing != "insert" and not self.exists(object_id):
-                if on_missing == "raise":
-                    raise ObjectNotFound(object_id)
-                # on_missing == "skip"
-                continue
             properties = upd.get("properties") or {}
             vectors = upd.get("vectors") or {}
 
@@ -411,19 +408,21 @@ class LanceDBBackend:
             for v in null_vecs:
                 null_vector_ops.append((object_id, v))
 
-        # Group rows by column signature so that merge_insert.when_matched_update_all()
-        # only writes the columns each row actually touches (otherwise missing columns
-        # would be nulled out for rows in the same batch that didn't specify them).
+        # Batch existence check — one query for all ids.
+        if seen:
+            missing = self._find_missing_ids(list(seen))
+            if missing:
+                raise ObjectNotFound(missing[0])
+
+        # Group rows by column signature so that when_matched_update_all() only
+        # writes the columns each row actually touches.
         groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
         for row in merge_rows:
             key = tuple(sorted(row.keys()))
             groups.setdefault(key, []).append(row)
         for rows in groups.values():
             table = self._batch_from_rows(rows)
-            builder = self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all()
-            if on_missing == "insert":
-                builder = builder.when_not_matched_insert_all()
-            builder.execute(table)
+            self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all().execute(table)
 
         for object_id, prop in null_scalar_ops:
             self._clear_scalar(object_id, prop)
@@ -454,30 +453,44 @@ class LanceDBBackend:
                 else:
                     write_vecs[k] = v
 
+        existence_checked = False
+
         if write_props or write_vecs:
             row = self._prepare_row(object_id, write_props, write_vecs)
             table = self._batch_from_rows([row])
             builder = self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all()
             if allow_insert:
                 builder = builder.when_not_matched_insert_all()
-            builder.execute(table)
-        for prop in null_props:
-            self._clear_scalar(object_id, prop)
-        for vec in null_vecs:
-            self._clear_vector(object_id, vec)
+            result = builder.execute(table)
+            if not allow_insert and result.num_updated_rows == 0:
+                raise ObjectNotFound(object_id)
+            existence_checked = True
 
-    def _clear_scalar(self, object_id: str, property_name: str) -> None:
-        # Ensure the column exists (caller may be clearing a pre-existing but unused column).
+        for prop in null_props:
+            result = self._clear_scalar(object_id, prop)
+            if not existence_checked:
+                if not allow_insert and result.rows_updated == 0:
+                    raise ObjectNotFound(object_id)
+                existence_checked = True
+
+        for vec in null_vecs:
+            result = self._clear_vector(object_id, vec)
+            if not existence_checked:
+                if not allow_insert and result.num_updated_rows == 0:
+                    raise ObjectNotFound(object_id)
+                existence_checked = True
+
+    def _clear_scalar(self, object_id: str, property_name: str):
         if property_name not in self._table_columns():
             raise SchemaError(f"Cannot clear property {property_name!r}: column does not exist.")
         arrow_type = self._column_type(property_name)
         sql_type = arrow_type_to_sql_type(arrow_type)
-        self._table.update(
+        return self._table.update(
             where=f"{OBJECT_ID_COLUMN} = {_quote_literal(object_id)}",
             values_sql={property_name: f"CAST(NULL AS {sql_type})"},
         )
 
-    def _clear_vector(self, object_id: str, vector_name: str) -> None:
+    def _clear_vector(self, object_id: str, vector_name: str):
         rec = self._registry.get_vector(vector_name)
         if rec is None:
             raise VectorFieldNotRegistered(vector_name)
@@ -490,7 +503,7 @@ class LanceDBBackend:
             ]
         )
         batch = pa.RecordBatch.from_arrays([ids, vec], schema=batch_schema)
-        self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all().execute(batch)
+        return self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all().execute(batch)
 
     # ------------------------------------------------------------------
     # Schema evolution
@@ -501,7 +514,6 @@ class LanceDBBackend:
         for name in names:
             rec = self._registry.get_vector(name)
             if rec is not None:
-                # Drop any index first.
                 if rec.index:
                     self._drop_index_by_column(rec.column)
                 columns_to_drop.append(rec.column)
@@ -513,7 +525,7 @@ class LanceDBBackend:
                 columns_to_drop.append(name)
                 self._registry.remove_property(name)
         if columns_to_drop:
-            self._table.drop_columns(columns_to_drop)
+            _with_retry(self._table.drop_columns, columns_to_drop)
 
     def rename_field(self, old: str, new: str) -> None:
         rec = self._registry.get_vector(old)
@@ -529,7 +541,7 @@ class LanceDBBackend:
             saved_index = rec.index
             if saved_index:
                 self._drop_index_by_column(old_column)
-            self._table.alter_columns({"path": old_column, "rename": new_column})
+            _with_retry(self._table.alter_columns, {"path": old_column, "rename": new_column})
             new_rec = self._registry.rename_vector(old, new)
             if saved_index:
                 self._recreate_index(new_rec, saved_index)
@@ -543,7 +555,7 @@ class LanceDBBackend:
                 )
             if new in self._table_columns():
                 raise SchemaError(f"Column {new!r} already exists.")
-            self._table.alter_columns({"path": old, "rename": new})
+            _with_retry(self._table.alter_columns, {"path": old, "rename": new})
             self._registry.rename_property(old, new)
             return
         raise SchemaError(f"No field named {old!r} to rename.")
@@ -613,9 +625,6 @@ class LanceDBBackend:
         self._validate_distance_bounds(min_distance, max_distance)
         rec, effective_metric = self._prepare_vector_query(query_vector, vector_field, metric)
 
-        # Pass lower_bound=None (not 0.0) when the caller did not specify one:
-        # for metric="dot" the LanceDB distance is `1 - dot(q,v)` and can be
-        # negative, so a 0.0 floor would silently drop valid matches.
         lower = None if min_distance is None else float(min_distance)
         upper = float(max_distance)
 
@@ -629,7 +638,6 @@ class LanceDBBackend:
         if select:
             user_select = list(dict.fromkeys([OBJECT_ID_COLUMN, *select]))
             builder = builder.select(user_select)
-        # LanceDB requires a limit; None means "unbounded" at our API boundary.
         builder = builder.limit(_UNBOUNDED_LIMIT if limit is None else int(limit))
         if nprobes is not None:
             builder = builder.nprobes(nprobes)
@@ -668,9 +676,6 @@ class LanceDBBackend:
     def _validate_distance_bounds(min_distance: float | None, max_distance: float) -> None:
         if max_distance is None:
             raise ValueError("search_within() requires max_distance.")
-        # Negative `max_distance` is allowed for metric="dot" (LanceDB distance
-        # is `1 - dot` and can be negative). For cosine/l2 a non-positive bound
-        # will simply return an empty result — caller's responsibility.
         if not math.isfinite(max_distance):
             raise ValueError(f"max_distance must be a finite number, got {max_distance!r}.")
         if min_distance is not None:
@@ -690,7 +695,6 @@ class LanceDBBackend:
     ) -> SearchResult:
         distance = row.pop("_distance")
         object_id = row.pop(OBJECT_ID_COLUMN)
-        # Filter to requested properties; strip internal vector columns and _rowid, _score.
         row.pop("_rowid", None)
         row.pop("_score", None)
         properties = {k: v for k, v in row.items() if not k.startswith(VECTOR_COLUMN_PREFIX)}
@@ -718,7 +722,8 @@ class LanceDBBackend:
         if rec is None:
             raise VectorFieldNotRegistered(vector_field)
         metric_n = normalize_metric(metric)
-        self._table.create_index(
+        _with_retry(
+            self._table.create_index,
             metric=metric_n,
             vector_column_name=rec.column,
             index_type=index_type,
@@ -775,7 +780,8 @@ class LanceDBBackend:
 
     def _recreate_index(self, rec: VectorFieldRecord, saved: dict[str, Any]) -> None:
         params = {k: v for k, v in saved.items() if k not in {"type", "metric"}}
-        self._table.create_index(
+        _with_retry(
+            self._table.create_index,
             metric=saved["metric"],
             vector_column_name=rec.column,
             index_type=saved["type"],
@@ -841,8 +847,6 @@ class LanceDBBackend:
             row.pop("_rowid", None)
             row.pop("_score", None)
             obj = self._row_to_object_dict(row)
-            # list() returns the flattened per-spec — for the public wrapper it's easier
-            # to expose {object_id, properties} without vectors by default.
             if select is not None:
                 obj["properties"] = {k: v for k, v in obj["properties"].items() if k in set(select)}
             out.append(obj)

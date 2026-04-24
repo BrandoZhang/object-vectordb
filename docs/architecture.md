@@ -349,44 +349,39 @@ occurrence of each id are preserved on the returned `SearchResult`.
 
 ## Concurrency model
 
-Single-writer only. The JSON sidecar is not locked. Concurrent readers are
-safe: LanceDB supports concurrent reads on a table, and the registry is
-re-read on every ObjectVectorDB construction. For multi-writer, route writes
-through a queue consumer running in a single process.
+Concurrent readers are always safe. As of 0.2.0, concurrent writers are also
+safe for `add`, `update`, `upsert`, `delete`, and schema mutations
+(`register_vector_field`, `create_index`, etc.).
 
-### Side effects under the single-writer contract
+### How multi-writer safety works
 
-These are consequences of the single-writer assumption that a caller should
-know about before violating it:
+- **`add()` / `batch_add()`**: use `merge_insert.when_not_matched_insert_all`
+  and inspect `MergeResult.num_inserted_rows`. If 0, the id already existed —
+  `DuplicateObject` is raised. No separate pre-check, no TOCTOU window.
+- **`update()`**: uses `merge_insert.when_matched_update_all` and inspects
+  `MergeResult.num_updated_rows`. If 0, the id was absent (possibly deleted by
+  a concurrent writer) — `ObjectNotFound` is raised. No silent no-op.
+- **`batch_update()`**: performs a single batch existence check (one
+  `IN (...)` query for all ids) before writing. Concurrent deletes between the
+  check and the writes may cause a TOCTOU, but this is far less likely than
+  N per-row checks and is the documented best-effort guarantee.
+- **Schema mutations** (`register_vector_field`, `create_index`,
+  `drop_fields`, `rename_field`): wrapped in `_with_retry` (up to 5 attempts
+  with 50–800 ms exponential backoff) to handle Lance manifest commit conflicts.
+  Vector field metadata is stored in Arrow field metadata on the `__vec_<name>`
+  column; updates go through `replace_field_metadata`, which uses the Lance
+  transactional manifest.
+- **Registry**: the old JSON sidecar is gone. Vector field records now live
+  in Arrow field metadata inside the Lance manifest, which is conflict-retried
+  automatically by LanceDB.
 
-- **TOCTOU on `add()` / `update()` pre-checks.** `add()` does
-  `count_rows → merge_insert.when_not_matched_insert_all`; `update()` and
-  `batch_update()` do `exists → merge_insert`. A concurrent writer between
-  the check and the merge_insert can cause:
-  - Two `add()` calls with the same id: the loser's `when_not_matched_insert_all`
-    silently no-ops — **no error is raised**, the caller believes the write
-    succeeded.
-  - Concurrent `delete` racing an `update()` with the default
-    `on_missing="raise"`: the merge_insert is update-only, so it silently
-    no-ops and the row stays deleted. The caller sees `update()` return
-    successfully even though no row was written. `batch_update` is the
-    same. Pass `on_missing="insert"` if you want the upsert behavior
-    instead — that path **silently re-inserts a partial row** containing
-    only the columns the update touched; every other column is null. Both
-    behaviors are pinned by tests in `tests/test_update.py`
-    (`test_update_default_silently_noops_when_concurrently_deleted` and
-    `test_update_on_missing_insert_resurrects_partial_row`).
-- **Registry sidecar.** Two processes calling `register_vector_field` or
-  writing schema concurrently can lose one update: each reads the JSON, each
-  writes its own modified copy via `os.replace`. The Lance columns exist, but
-  the registry forgets them — subsequent opens see a "property column
-  starting with `__vec_`" state that property-name validation rejects.
-- **`batch_update` is not atomic across groups.** Rows are split into
-  column-signature groups, each executed as its own `merge_insert`, followed
-  by per-row null-clears. If the process crashes mid-batch, the batch is
-  partially applied. Callers that need atomicity should either keep batches
-  small enough to recover by re-running or integrate with LanceDB's
-  versioning (`table.checkout_latest` / restore).
+### Remaining limitations
+
+- **`batch_update` is not atomic across column-signature groups.** Rows with
+  differing column sets are split into N independent `merge_insert` calls. Each
+  call is atomic and conflict-retried; the batch as a whole is not. A crash
+  mid-batch leaves it partially applied. For full atomicity, issue homogeneous
+  batches (same columns for every row).
 - **Search sees an indexed delta.** Vectors added or updated after an IVF
   index was built are searched via LanceDB's unindexed-delta path until the
   next `optimize()` / index refresh. Results are correct, but latency and
@@ -396,5 +391,4 @@ know about before violating it:
   different `dim` after the first registration raises `DimensionMismatch`.
   If the first registration used the wrong dimension and rows already
   reference it, the only recovery is `drop_fields([name])` followed by
-  `register_vector_field(name, correct_dim)` and re-ingest. The registry
-  is the source of truth for `dim`; it cannot be changed in place.
+  `register_vector_field(name, correct_dim)` and re-ingest.

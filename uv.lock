@@ -257,7 +257,7 @@ wheels = [
 
 [[package]]
 name = "object-vectordb"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "lancedb" },
@@ -275,7 +275,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "lancedb", specifier = ">=0.24.0" },
+    { name = "lancedb", specifier = ">=0.30.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pyarrow", specifier = ">=16.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
