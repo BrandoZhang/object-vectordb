@@ -144,37 +144,54 @@ VectorStores / LlamaIndex / Haystack / FiftyOne, see
 
 Observed quick-tier benchmarks (`uv run pytest benches/ --benchmark-only -m "not full"`).
 Hardware: x86-64, 16 cores @ 2.8 GHz, 22 GB RAM, local ext4 storage.
-Vector dim = 128 throughout.
+Vector dim = 1024 throughout (realistic embedding size; BGE-M3-class).
+Post-BTREE-index: the backend auto-creates a `BTREE` scalar index on
+`object_id` at table bootstrap, so existence-check paths are O(log N).
 
 | Operation                                       | Spec target | Observed median | Status |
 | ----------------------------------------------- | ----------- | ---------------: | ------ |
-| `search`, indexed, 1 K rows (quick tier)        | < 50 ms @ 100 K | 9.2 ms       | on track |
-| `search`, brute-force, 1 K rows (quick tier)    | < 50 ms @ 100 K | 10.3 ms      | on track |
-| `register_vector_field` on 10 K-row table       | < 1 s @ 1 M   | 10.4 ms        | on track (zero-copy) |
-| `export_vectors` from 1 K-row table             | < 10 s @ 100 K | 70.1 ms       | on track |
-| `batch_add` 1 000 rows                           | — (informational) | 6.82 s    | see note |
-| `add` single object                              | < 10 ms (as part of roundtrip) | 40.4 ms | **over target** |
-| `add` + `get` roundtrip, single object          | < 10 ms        | 51.1 ms        | **over target** |
-| `get` single object (1 K-row table)              | — (part of roundtrip) | 296.9 ms | see note |
-| `batch_update` 1 000 rows (full tier)            | < 5 s          | 293 s          | **over target ~60×** |
+| `search`, indexed (IVF_PQ), 1 K rows             | < 50 ms @ 100 K   | 11.96 ms  | on track |
+| `search`, brute-force, 1 K rows                  | < 50 ms @ 100 K   | 14.29 ms  | on track |
+| `register_vector_field` on 10 K-row table        | < 1 s @ 1 M       | 29.62 ms  | on track (zero-copy) |
+| `add` single object                              | < 10 ms (as part of roundtrip) | 29.58 ms | **over target** |
+| `add` + `get` roundtrip, single object           | < 10 ms           | 54.54 ms  | **over target** |
+| `get` single object (1 K-row table)              | — (part of roundtrip) | 361.16 ms | see note |
+| `export_vectors` from 1 K-row table              | < 10 s @ 100 K    | 352.22 ms | on track |
+| `batch_add` 1 000 rows                            | — (informational) | Lance OOM | see note |
+| `batch_update` 1 000 rows (full tier; not re-run) | < 5 s            | not measured | — |
 
 **Notes**:
 
-- **Benchmark numbers above predate the `object_id` BTREE scalar index.**
-  The backend now auto-creates a `BTREE` scalar index on `object_id` at
-  table bootstrap, so `get()`, `exists()`, `delete()`, the per-row existence
-  pre-checks in `add` / `update` / `batch_add` / `batch_update`, and the
-  new `batch_get()` all run on an O(log N) index lookup instead of a full
-  table scan. Re-record these numbers before shipping.
-- **Existing tables are migrated on open**: `_ensure_object_id_index`
-  checks `list_indices()` and creates the BTREE if it's missing, so
-  reopening a pre-index collection builds the index once and keeps it.
-- **Spec-scale (100 K / 1 M row) numbers are not yet recorded**. Run
+- **`get` is still the slow outlier.** The BTREE cuts the id lookup to
+  O(log N), but `get()` reconstructs a full object row including every
+  registered vector column; at dim=1024 that's 4 KB/row plus the
+  pyarrow→Python list conversion, which dominates the ~360 ms median.
+  Returning a narrower projection (or deferring vector materialization)
+  would close most of this gap — filed as a follow-up.
+- **`add_single` and `add_get_roundtrip` improved substantially vs the
+  previous dim=128 pre-BTREE run** (40 ms → 30 ms and 51 ms → 55 ms
+  respectively) even with 8× larger vectors, confirming that the
+  existence-check was the previous bottleneck, not vector I/O.
+- **`batch_add` 1 000 rows hit Lance's DataFusion sort memory pool** at
+  dim=1024:
+  ```
+  Not enough memory to continue external sort … 6.4 MB remain available
+  for the total pool … merge_insert.rs
+  ```
+  A 1 000-row × 1024-dim batch is 4 MB; `merge_insert`'s external sort
+  needs more headroom than Lance allocates by default. Workarounds: feed
+  `batch_add` in chunks of ≤250 rows, or configure a larger memory pool
+  via `storage_options` at connect time. The constraint scales with
+  dim × batch_size, so this is a real production consideration for
+  high-dim embeddings.
+- **Spec-scale (100 K / 1 M row) numbers are still not recorded.** Run
   `uv run pytest benches/ --benchmark-only -m full` on a sustained-CPU
-  machine to collect them; expect `batch_update` to dominate runtime.
+  machine with enough memory pool to collect them; expect `batch_update`
+  to be the dominant cost.
 
 Re-run and update this table whenever the benchmark suite is executed. See
-[`benches/README.md`](benches/README.md) for the full recipe.
+[`benches/README.md`](benches/README.md) for the full recipe. The default
+bench dim is set in `benches/conftest.py::DEFAULT_DIM`.
 
 ## Concurrency
 

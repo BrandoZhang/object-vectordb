@@ -17,7 +17,7 @@ import pytest
 
 from object_vectordb import Collection, ObjectAdd, ObjectVectorDB
 
-DEFAULT_DIM = 128
+DEFAULT_DIM = 1024
 SEED = 42
 
 
