@@ -380,15 +380,14 @@ safe for `add`, `update`, `upsert`, `delete`, and schema mutations
 ### Remaining limitations
 
 - **Same-id concurrent inserts may duplicate.** Lance treats a no-match
-  `merge_insert` as a commutative append: two writers that both observe "no
-  existing row at read time" will both commit, leaving two rows with the same
-  `object_id`.  `add()` raises `DuplicateObject` whenever the row was visible
-  at read time, but it cannot detect a racing writer that commits in parallel.
-  Callers requiring strict same-id uniqueness under concurrency must serialize
-  externally (a per-id lock, or a distributed lock across processes).
-  Concurrent writes to *distinct* ids are unaffected, and concurrent
-  updates / upserts against the same *existing* row serialize via Lance's
-  manifest conflict-retry.
+  `merge_insert` as a commutative append, so two writers that both observe
+  "no existing row at read time" can both commit and leave duplicate rows.
+  The SDK cannot fix this — it is a property of the storage layer. For
+  strict same-id uniqueness under concurrency, serialize writes at the
+  system level (typically a single write-service process per URI). See
+  [`docs/concurrency.md`](concurrency.md) for the full design discussion,
+  a reference architecture, and a comparison with how Weaviate, Qdrant,
+  Milvus, Pinecone, and pgvector handle the same problem.
 - **`batch_update` is not atomic across column-signature groups.** Rows with
   differing column sets are split into N independent `merge_insert` calls. Each
   call is atomic and conflict-retried; the batch as a whole is not. A crash

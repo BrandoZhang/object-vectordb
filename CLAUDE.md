@@ -79,6 +79,7 @@ Logic is in `scoring.py`. If you add a new metric, add a calibration test in `te
 
 - `docs/concepts.md` — mental model (objects, properties, vectors, registration).
 - `docs/architecture.md` — design, LanceDB API usage table, full gotcha list, write-path walkthroughs for add / update / batch_update.
+- `docs/concurrency.md` — multi-writer design decision, reference write-service architecture, and comparison with Weaviate / Qdrant / Milvus / Pinecone / pgvector.
 - `docs/api.md` — full public API reference.
 - `docs/filters.md` — DataFusion SQL `where=` syntax.
 - `docs/testing.md` — what each test file covers and the v1 gate tests.

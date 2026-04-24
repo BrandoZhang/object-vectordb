@@ -16,7 +16,7 @@ sidestep:
 
 The conclusion is open. If a better backend or abstraction exists, we would
 rather know than pretend otherwise. Section 6 lists LanceDB's weaknesses
-honestly, and section 7 names the signals that would push us to switch.
+honestly, and section 8 names the signals that would push us to switch.
 
 ## 2. Requirements
 
@@ -166,9 +166,17 @@ layer should know them:
   `values_sql={col: "CAST(NULL AS <sql_type>)"}` for scalars and
   `merge_insert` with an Arrow-null `FixedSizeList` for vector clears. See
   [`CLAUDE.md`](../CLAUDE.md) line 58.
-- **Single-writer concurrency model.** LanceDB table writes and our JSON
-  registry sidecar both assume a single writer. See
-  [`concepts.md`](concepts.md) lines 170–175.
+- **No primary-key uniqueness at the storage layer.** LanceDB has no PK
+  concept: `merge_insert(...).when_not_matched_insert_all()` commits as a
+  commutative append, so two concurrent writers inserting the same
+  `object_id` can both succeed and leave duplicate rows. As of 0.2.0 most
+  write paths are multi-writer safe (distinct ids, updates, upserts
+  against existing rows, schema mutations), but strict same-id uniqueness
+  under concurrency still needs a serialization point **in front of** the
+  SDK — a single write-service process, a sharded writer fleet, or an
+  external distributed lock. See section 7 for how other vector DBs solve
+  this, and [`concurrency.md`](concurrency.md) for the reference
+  architecture.
 - **No scalar index on `object_id` by default** → O(N) `get`, O(N²)
   `batch_update`. See [`README.md`](../README.md) lines 158–165.
 - **Index metric wins at search.** Once an index exists, LanceDB silently
@@ -181,10 +189,53 @@ layer should know them:
   mixes `{"n": 1}` and `{"v": [...]}` rows would null-out `v` on the first
   row without column-signature grouping. See [`CLAUDE.md`](../CLAUDE.md)
   line 59.
-- **JSON registry sidecar is not transactional.** A crash between registry
-  write and table write can desync them. Documented as single-writer only.
+- **JSON registry sidecar is not transactional.** *(Resolved in 0.2.0.)*
+  Vector field records now live in Arrow field metadata inside the Lance
+  manifest and are conflict-retried by LanceDB. Old sidecars are
+  auto-migrated on first open.
 
-## 7. Is there a better option?
+## 7. Multi-writer handling across backends
+
+Every mainstream vector DB solves the same-key coordination problem
+*below* the SDK layer — inside a storage-owned process, not in the client
+library. This section summarizes how each candidate backend handles it,
+to make explicit what `object_vectordb` is giving up by using LanceDB and
+what a system designer therefore has to build on top.
+
+| System      | Storage model                            | PK uniqueness                           | Where writes serialize                                        |
+|-------------|------------------------------------------|-----------------------------------------|---------------------------------------------------------------|
+| Weaviate    | LSM + WAL per shard                      | Enforced via inverted index on `_id`    | Shard primary (Raft); all writes go through the leader        |
+| Qdrant      | Per-segment RocksDB                      | `upsert`-only API; last-write-wins      | Per-segment write lock inside the shard process               |
+| Milvus      | Log-structured, distributed              | Optional (`AutoID=false` + PK field)    | Proxy → MsgStream (Pulsar/Kafka) → DataNode pipeline          |
+| Chroma      | SQLite / DuckDB + HNSW                   | `upsert`-only API                       | Single-process by design (embedded); no cross-process story   |
+| Pinecone    | Managed, opaque                          | `upsert`-only API; last-write-wins      | Internal transaction layer (not exposed)                      |
+| pgvector    | Postgres heap + B-tree + MVCC            | Full SQL `PRIMARY KEY` constraints      | MVCC + page-level latches, standard Postgres guarantees       |
+| Vespa       | Proton content cluster, per-bucket       | Document id enforced per bucket         | Content node owns a bucket; writes serialized per bucket      |
+| **LanceDB** | **Append-only columnar + manifest OCC**  | **None**                                | **Appends commute; updates conflict-retry. Inserts do not.**  |
+
+A few observations worth stating explicitly:
+
+- **No mainstream vector DB relies on client-side coordination** for
+  same-id uniqueness. All of them push serialization into a
+  storage-owned process (or the storage engine itself).
+- **Weaviate, Qdrant, and Vespa all use a single-writer-per-shard model.**
+  This is the same pattern the reference architecture in
+  [`concurrency.md`](concurrency.md) recommends for `object_vectordb` —
+  they just implement it *inside* the DB process rather than in front of
+  it.
+- **Most backends sidestep the problem at the API level** by only
+  exposing upsert semantics (last-write-wins). `add()`'s "error on
+  duplicate" behavior is actually uncommon; it is a database constraint
+  (Postgres PK, Vespa document id), not a client-side rule.
+- **pgvector is the cheap escape hatch** for projects that need strict PK
+  uniqueness and are willing to give up Lance's columnar-storage
+  advantages.
+- **LanceDB's position is deliberate, not an oversight.** Its
+  append-commutes-with-append property is exactly what makes concurrent
+  ingestion from Spark / Ray / Dask cheap. The tradeoff is the one
+  documented above.
+
+## 8. Is there a better option?
 
 No OSS backend today satisfies all six hard requirements simultaneously —
 most stumble either on *embedded + dynamic-schema-without-DDL* or on
@@ -196,7 +247,7 @@ Concrete switch signals:
 
 | Signal | Switch to | Why |
 | --- | --- | --- |
-| Need multi-writer without a router | Qdrant / Weaviate | Native concurrent writes (cost: give up the embedded story) |
+| Need strict same-id uniqueness under concurrency without a write-service router | Qdrant / Weaviate / pgvector | PK uniqueness is enforced by the storage layer itself (cost: give up the embedded, object-store-native story) |
 | Scale blows past 10M per collection | Milvus | Cluster-native sharding, server-side fusion |
 | Polyglot clients required | Qdrant / Weaviate | Stable HTTP + gRPC |
 | Want managed ops, cost not primary | Pinecone | Zero-op SaaS (cost: lose multi-named-vector model) |
@@ -204,7 +255,7 @@ Concrete switch signals:
 | Text-search primary, vectors secondary | Vespa / Typesense | Mature text-ranking primitives |
 | S3-native storage is gating, SaaS acceptable | Turbopuffer | Storage architecture leader |
 
-## 8. Why a library on top, not raw LanceDB
+## 9. Why a library on top, not raw LanceDB
 
 Eight pain points a direct-LanceDB caller hits that this library removes:
 
@@ -268,7 +319,7 @@ media.add("video_001", properties={"title": "A cat playing piano"},
           vectors={"text_openai": embedding})
 ```
 
-## 9. Competing abstraction libraries
+## 10. Competing abstraction libraries
 
 LangChain `VectorStores`, LlamaIndex, Haystack, and FiftyOne all wrap vector
 DBs. None of them model **multi-named-vectors-per-object with an extensible
@@ -287,7 +338,7 @@ generic object identified by `object_id`, carrying any number of named
 vectors across any modalities, with a dynamic property bag, and a fusion
 utility that operates on the ranked results.
 
-## 10. Sources
+## 11. Sources
 
 - [VectorDBBench](https://github.com/zilliztech/VectorDBBench) — QPS / recall
   benchmarks across engines.
