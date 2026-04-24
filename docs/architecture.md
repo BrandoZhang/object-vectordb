@@ -237,29 +237,33 @@ store.update("x", vectors={"image_clip": None})
 ## `add`, `update`, and `batch_update` write paths
 
 - `add(object_id, properties, vectors)`
-  1. Pre-check: `count_rows("object_id = 'x'") > 0` → `DuplicateObject`.
-  2. Ensure every property column exists (auto-add via `add_columns`).
-  3. Build a single-row pyarrow Table with exactly the touched columns.
-  4. `merge_insert("object_id").when_not_matched_insert_all().execute(batch)`.
+  1. Ensure every property column exists (auto-add via `add_columns`);
+     verify type / dim on a concurrent-add race.
+  2. Build a single-row pyarrow Table with exactly the touched columns.
+  3. `merge_insert("object_id").when_not_matched_insert_all().execute(batch)`.
+  4. Inspect `MergeResult.num_inserted_rows`; raise `DuplicateObject` if 0.
+     No pre-check, so there is no TOCTOU window against a concurrent
+     `merge_insert`.
 
-- `update(object_id, properties?, vectors?, on_missing="raise")`
-  1. If `on_missing != "insert"`: pre-check existence; on missing, raise
-     `ObjectNotFound` (`"raise"`) or silently return (`"skip"`).
-  2. Separate None values (clears) from non-None writes.
-  3. If any writes: build a one-row batch with only the touched columns and
-     run `merge_insert.when_matched_update_all()`. With `on_missing="insert"`
-     the merge also adds `when_not_matched_insert_all()` (upsert). Because
-     the batch only contains the touched columns, `when_matched_update_all()`
-     leaves all other columns untouched.
+- `update(object_id, properties?, vectors?)`
+  1. Separate None values (clears) from non-None writes.
+  2. If any writes: build a one-row batch with only the touched columns
+     and run `merge_insert.when_matched_update_all()`. Because the batch
+     only contains the touched columns, every other column on the row is
+     preserved.
+  3. Inspect `MergeResult.num_updated_rows`; raise `ObjectNotFound` if 0.
   4. For each None clear: issue `values_sql` (scalars) or `merge_insert`
-     with null-vector batch (vectors). Null-clears use update-only
-     merge_insert and silently no-op on missing rows.
+     with null-vector batch (vectors). Each clear inspects its own
+     update-count and raises `ObjectNotFound` if the row was not touched
+     and we have not yet proven existence via an earlier write.
+  5. `upsert()` is the same path with `allow_insert=True`: the merge adds
+     `when_not_matched_insert_all()` and post-write no-row is treated as
+     a successful insert rather than `ObjectNotFound`.
 
-- `batch_update([ObjectUpdate, ...], on_missing="raise")`
+- `batch_update([ObjectUpdate, ...])`
   1. Reject duplicate `object_id`s inside the batch (`DuplicateObject`).
-  2. If `on_missing != "insert"`: pre-check existence per id; on missing,
-     either raise `ObjectNotFound` or drop the row from the batch
-     (`"skip"`).
+  2. Single batch existence check: one `IN (...)` query covering every
+     id; raise `ObjectNotFound` for the first missing id.
   3. Collect non-None writes into rows; collect None clears separately.
   4. **Group rows by column signature.** Within a group, every row touches
      the same column set, so `when_matched_update_all()` preserves every
@@ -268,10 +272,11 @@ store.update("x", vectors={"image_clip": None})
      (because a sibling row set `v`), with `v=None` — and
      `when_matched_update_all()` would null-out the original `v` for that
      row. Grouping avoids that failure mode.
-  5. For each group: one `merge_insert` call. With `on_missing="insert"`,
-     the call adds `when_not_matched_insert_all()` so missing rows become
-     partial inserts.
-  6. Issue per-row clears as above.
+  5. For each group: one `merge_insert` call; inspect per-group
+     `num_updated_rows` and raise `ObjectNotFound` for any row deleted
+     concurrently between the pre-check and the write.
+  6. Issue per-row clears; each one inspects its update-count and
+     surfaces `ObjectNotFound` on mid-batch deletion.
 
 ## Search path
 

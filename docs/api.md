@@ -209,7 +209,6 @@ update(
     object_id: str,
     properties: dict[str, Any] | None = None,
     vectors: dict[str, list[float] | None] | None = None,
-    on_missing: Literal["raise", "insert", "skip"] = "raise",
 ) -> None
 ```
 
@@ -219,14 +218,8 @@ Merge-update: only the specified fields are touched.
 - `None` **clears** the field on this specific object (the column stays,
   the cell becomes null).
 - New properties introduced here are auto-added to the schema.
-- `on_missing` controls behavior when `object_id` is not in the table:
-  - `"raise"` (default): raise `ObjectNotFound`. The merge_insert is
-    update-only, so a row deleted by a concurrent writer between the
-    pre-check and the merge becomes a silent no-op rather than a partial
-    re-insert.
-  - `"insert"`: upsert. If the row is missing, a partial row containing
-    only the touched columns is inserted (other columns are null).
-  - `"skip"`: silently no-op when the row is missing.
+- Raises `ObjectNotFound` if `object_id` is not in the table. Use
+  `upsert()` for insert-if-missing semantics.
 
 ---
 
@@ -240,8 +233,8 @@ upsert(
 ) -> None
 ```
 
-Insert if missing, merge-update if present. Equivalent to
-`update(object_id, ..., on_missing="insert")` but named for the common case.
+Insert if missing, merge-update if present. The only insert-if-missing
+path — `update()` always raises `ObjectNotFound` on absent rows.
 Semantics are **merge, not replace**: unspecified fields on an existing row
 are preserved, and missing rows are created as partial rows containing only
 the fields you passed.
@@ -253,7 +246,6 @@ the fields you passed.
 ```python
 batch_update(
     updates: Iterable[ObjectUpdate],
-    on_missing: Literal["raise", "insert", "skip"] = "raise",
 ) -> None
 ```
 
@@ -264,10 +256,12 @@ never nulls out a column that a sibling update did not touch.
 - Raises `DuplicateObject` if the same `object_id` appears twice in one
   batch (LanceDB's behavior on duplicate merge keys is undefined; we reject
   to avoid surprises).
-- `on_missing` is the same three-way switch as on `update`. With `"raise"`
-  (default), the first missing id raises `ObjectNotFound` and nothing is
-  written. With `"skip"`, missing rows are silently dropped from the batch
-  (others still apply). With `"insert"`, missing rows become partial inserts.
+- A single batch existence check (one `IN (...)` query) runs before any
+  write; if any id is missing, `ObjectNotFound` is raised and nothing is
+  written. Per-group `num_updated_rows` is also inspected after each
+  merge to catch rows deleted concurrently between pre-check and write.
+- For insert-if-missing semantics across a batch, issue individual
+  `upsert()` calls instead.
 
 ---
 
