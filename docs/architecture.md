@@ -356,8 +356,10 @@ safe for `add`, `update`, `upsert`, `delete`, and schema mutations
 ### How multi-writer safety works
 
 - **`add()` / `batch_add()`**: use `merge_insert.when_not_matched_insert_all`
-  and inspect `MergeResult.num_inserted_rows`. If 0, the id already existed —
-  `DuplicateObject` is raised. No separate pre-check, no TOCTOU window.
+  and inspect `MergeResult.num_inserted_rows`. If 0, the id was already visible
+  at merge read time — `DuplicateObject` is raised. No pre-check, so the TOCTOU
+  window against other merge operations is closed. See "Same-id concurrent
+  inserts" below for the one remaining caveat.
 - **`update()`**: uses `merge_insert.when_matched_update_all` and inspects
   `MergeResult.num_updated_rows`. If 0, the id was absent (possibly deleted by
   a concurrent writer) — `ObjectNotFound` is raised. No silent no-op.
@@ -377,6 +379,16 @@ safe for `add`, `update`, `upsert`, `delete`, and schema mutations
 
 ### Remaining limitations
 
+- **Same-id concurrent inserts may duplicate.** Lance treats a no-match
+  `merge_insert` as a commutative append: two writers that both observe "no
+  existing row at read time" will both commit, leaving two rows with the same
+  `object_id`.  `add()` raises `DuplicateObject` whenever the row was visible
+  at read time, but it cannot detect a racing writer that commits in parallel.
+  Callers requiring strict same-id uniqueness under concurrency must serialize
+  externally (a per-id lock, or a distributed lock across processes).
+  Concurrent writes to *distinct* ids are unaffected, and concurrent
+  updates / upserts against the same *existing* row serialize via Lance's
+  manifest conflict-retry.
 - **`batch_update` is not atomic across column-signature groups.** Rows with
   differing column sets are split into N independent `merge_insert` calls. Each
   call is atomic and conflict-retried; the batch as a whole is not. A crash

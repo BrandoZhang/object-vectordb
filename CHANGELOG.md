@@ -40,6 +40,15 @@
 
 ### Notes
 
+- **Same-id concurrent inserts are still best-effort.**
+  Lance treats no-match `merge_insert` as a commutative append, so two writers
+  that both observe "no row" at read time will both commit, producing duplicate
+  rows.  `add()` raises `DuplicateObject` whenever the row was visible at read
+  time, closing the old `exists()`→write TOCTOU, but it does not prevent two
+  racing inserts from both landing.  Use an external lock when strict same-id
+  uniqueness is required under concurrency.  Writes to distinct ids, and
+  updates/upserts against the same *existing* row, are fully safe.
+
 - **`batch_update` is still not atomic across column-signature groups.**
   A `batch_update` whose rows have differing column sets executes as N independent
   `merge_insert` calls.  Each call is atomic and conflict-retried; the batch as a
