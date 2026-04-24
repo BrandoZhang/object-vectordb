@@ -324,6 +324,39 @@ def test_concurrent_collection_creation_same_name(tmp_path):
     assert "shared" in db.list_collections()
 
 
+def test_ensure_object_id_index_sees_concurrent_winner(tmp_path):
+    """Regression for the H1 flake: the loser of a concurrent CreateIndex
+    race must still succeed because the index ends up existing.
+
+    Deterministic repro of the CI-flake race without relying on thread
+    scheduling: open two table handles on the same table, have one create
+    the object_id index, then drive _ensure_object_id_index through the
+    OTHER (stale) handle with required=True.  The stale handle's
+    list_indices() initially misses the winner's just-committed CreateIndex
+    (because LanceDB pins the manifest version at open time), so the code
+    proceeds to create_scalar_index, which raises "already exists" or
+    "Incompatible transaction".  The post-retry recovery must refresh the
+    manifest view to see the winner's index and converge to success.
+    """
+    import lancedb
+
+    from object_vectordb.backend import OBJECT_ID_COLUMN, LanceDBBackend
+
+    raw_db = lancedb.connect(str(tmp_path / "db"))
+    winner = raw_db.create_table("t", data=[{OBJECT_ID_COLUMN: "seed"}])
+    loser = raw_db.open_table("t")  # pins manifest at version before index
+
+    winner.create_scalar_index(OBJECT_ID_COLUMN, index_type="BTREE")
+
+    # Sanity: loser's stale view does not yet see the winner's index.
+    assert not any(
+        getattr(idx, "columns", None) == [OBJECT_ID_COLUMN] for idx in loser.list_indices()
+    )
+
+    # Must not raise: recovery must refresh and observe the winner's index.
+    LanceDBBackend._ensure_object_id_index(loser, required=True)
+
+
 # ---------------------------------------------------------------------------
 # H2: batch_update detects rows deleted between pre-check and write
 # ---------------------------------------------------------------------------
