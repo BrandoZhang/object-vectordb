@@ -150,8 +150,11 @@ class LanceDBBackend:
             # concurrent" or a transient failure.  If the index now exists
             # (because the concurrent writer's CreateIndex won the commit
             # race), treat it as success regardless of `required`: the end
-            # state matches our intent.
-            if LanceDBBackend._has_object_id_index(table):
+            # state matches our intent.  Pass refresh=True because our table
+            # handle's manifest view is pinned to the version we saw before
+            # the race; list_indices() against the stale view will miss the
+            # winner's just-committed CreateIndex transaction.
+            if LanceDBBackend._has_object_id_index(table, refresh=True):
                 return
             # Other failures (read-only credentials, unrelated errors) are
             # only fatal when we just created the table and genuinely need
@@ -161,7 +164,16 @@ class LanceDBBackend:
             log.debug("Could not create object_id BTREE index (non-fatal): %s", exc)
 
     @staticmethod
-    def _has_object_id_index(table) -> bool:
+    def _has_object_id_index(table, refresh: bool = False) -> bool:
+        # LanceDB Table handles pin a manifest version at open/create time;
+        # list_indices() reads from that pinned view and will not see indices
+        # committed by a concurrent writer on the same physical dataset.  When
+        # we're checking *after* a concurrent race, refresh the view first.
+        if refresh:
+            try:
+                table.checkout_latest()
+            except Exception as exc:  # pragma: no cover - defensive
+                log.debug("checkout_latest failed: %s", exc)
         for idx in table.list_indices():
             if getattr(idx, "columns", None) == [OBJECT_ID_COLUMN]:
                 return True
