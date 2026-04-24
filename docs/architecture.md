@@ -23,7 +23,8 @@ src/object_vectordb/
 ├── backend.py       # LanceDBBackend — all LanceDB + pyarrow code. One instance
 │                    #   per Collection; receives a shared lancedb connection.
 ├── registry.py      # SchemaRegistry (root) + CollectionRegistry (per-collection
-│                    #   proxy). JSON sidecar with two-level structure.
+│                    #   proxy). No on-disk state — reads/writes Arrow field
+│                    #   metadata on the Lance manifest.
 ├── fusion.py        # rrf_merge — module-level rank-fusion utility.
 ├── scoring.py       # Per-metric distance → similarity score conversion.
 └── arrow_utils.py   # Python-value → pyarrow-type inference, record-batch helpers.
@@ -36,7 +37,7 @@ ObjectVectorDB   (public, DB handle)
     │
     └── Collection   (public, per-collection operations)
             │
-            ├── CollectionRegistry   (scoped view of the JSON sidecar)
+            ├── CollectionRegistry   (scoped view of Arrow field metadata)
             └── LanceDBBackend        (lancedb + pyarrow)
 ```
 
@@ -51,74 +52,46 @@ no abstract base class and no registry of backends. Just disciplined layering.
 
 ## Schema registry
 
-The registry is a JSON file written next to the Lance table directory:
+Collection and vector-field metadata lives **inside the Lance manifest**,
+as Arrow field metadata on specific columns. There is no on-disk state
+outside `<uri>/<table_name>.lance/`:
 
-```
-<uri>/
-├── <table_name>.lance/                  # LanceDB's own files
-└── object_vectordb_registry.json           # our metadata sidecar
-```
+| Where                                       | What                                                          |
+|---------------------------------------------|---------------------------------------------------------------|
+| `object_id` field metadata                  | `ovdb_schema_version = "1"` — the sentinel that marks a table as ours |
+| `__vec_<name>` field metadata               | `ovdb_dim`, `ovdb_description`, `ovdb_index` (JSON-encoded index config) |
+| Property columns                            | Inferred from the table schema at read time; no registry entry needed |
 
-It tracks:
+`list_collections()` walks `db.table_names()` and keeps the ones whose
+`object_id` field carries the sentinel, so foreign Lance tables dropped
+into the same URI are invisible to the SDK.
 
-- Which columns are vector fields vs. properties.
-- Each vector field's dimensionality.
-- Each vector field's optional human description.
-- Each vector field's index configuration (type, metric, and the originally-passed
-  `num_partitions` / `num_sub_vectors` / etc. that LanceDB's `index_stats()`
-  does not round-trip).
-
-Shape (version 2 — namespaced by collection):
-
-```json
-{
-  "version": 2,
-  "collections": {
-    "videos": {
-      "vector_fields": {
-        "text_openai": {
-          "name": "text_openai",
-          "dim": 1536,
-          "column": "__vec_text_openai",
-          "description": "text-embedding-3-small",
-          "index": {
-            "type": "IVF_PQ",
-            "metric": "cosine",
-            "num_partitions": 256,
-            "num_sub_vectors": 16
-          }
-        }
-      },
-      "property_columns": ["title", "views", "tags"]
-    },
-    "images": {
-      "vector_fields": {"...": "..."},
-      "property_columns": ["..."]
-    }
-  }
-}
-```
+Writes go through LanceDB's `replace_field_metadata` and `add_columns`,
+both of which update the Lance manifest transactionally and are retried
+on commit conflict via `_with_retry`.
 
 Backends never see the root `SchemaRegistry` directly — they receive a
-`CollectionRegistry` proxy that scopes all reads/writes to a single collection.
-This keeps the backend code identical whether it's operating on collection A
-or collection B.
+`CollectionRegistry` proxy that scopes all reads/writes to a single
+collection, keeping backend code identical whether it is operating on
+collection A or B.
 
-Writes go through `os.replace(tmp, final)` for atomicity. The registry
-assumes a single writer — there is no file-level lock.
+### Why Arrow field metadata, not a JSON sidecar?
 
-### Why JSON sidecar, not a Lance metadata table?
+Storing registry state in the Lance manifest gives:
 
-The registry is ~1 KB of config-shaped data read on every `ObjectVectorDB`
-method call. A JSON file loads in microseconds, versions cleanly in git for
-test repos, is human-inspectable, and avoids creating a second Lance dataset
-just to store a handful of settings. A Lance-table registry would introduce
-bootstrap problems (how do you read the registry before it exists?) and
-force every registry read through the LanceDB query engine, for no gain.
+- **Atomic schema mutations** — every registry write is a manifest commit,
+  so it cannot diverge from the column it describes.
+- **Conflict-retried concurrency** — Lance retries manifest commits on
+  conflict, which means concurrent `register_vector_field` calls converge
+  without a file-level lock.
+- **No bootstrap problem** — the manifest already exists as soon as the
+  table does; there is no separate "create the registry" step.
+- **S3 / object-store native** — no second code path for non-POSIX URIs.
 
-If multi-writer support is ever required, the registry abstraction is
-localized enough that switching to a transactional Lance table at
-`<uri>/_registry` is a single-file change behind `SchemaRegistry`.
+The earlier design used a JSON file next to the Lance directory, which
+required filesystem semantics (`pathlib`, `os.replace`) and carried a
+TOCTOU window between the registry write and the table write. Migrating
+to Arrow field metadata closed that entire class of bugs.
 
 ## Column naming convention
 
@@ -264,29 +237,33 @@ store.update("x", vectors={"image_clip": None})
 ## `add`, `update`, and `batch_update` write paths
 
 - `add(object_id, properties, vectors)`
-  1. Pre-check: `count_rows("object_id = 'x'") > 0` → `DuplicateObject`.
-  2. Ensure every property column exists (auto-add via `add_columns`).
-  3. Build a single-row pyarrow Table with exactly the touched columns.
-  4. `merge_insert("object_id").when_not_matched_insert_all().execute(batch)`.
+  1. Ensure every property column exists (auto-add via `add_columns`);
+     verify type / dim on a concurrent-add race.
+  2. Build a single-row pyarrow Table with exactly the touched columns.
+  3. `merge_insert("object_id").when_not_matched_insert_all().execute(batch)`.
+  4. Inspect `MergeResult.num_inserted_rows`; raise `DuplicateObject` if 0.
+     No pre-check, so there is no TOCTOU window against a concurrent
+     `merge_insert`.
 
-- `update(object_id, properties?, vectors?, on_missing="raise")`
-  1. If `on_missing != "insert"`: pre-check existence; on missing, raise
-     `ObjectNotFound` (`"raise"`) or silently return (`"skip"`).
-  2. Separate None values (clears) from non-None writes.
-  3. If any writes: build a one-row batch with only the touched columns and
-     run `merge_insert.when_matched_update_all()`. With `on_missing="insert"`
-     the merge also adds `when_not_matched_insert_all()` (upsert). Because
-     the batch only contains the touched columns, `when_matched_update_all()`
-     leaves all other columns untouched.
+- `update(object_id, properties?, vectors?)`
+  1. Separate None values (clears) from non-None writes.
+  2. If any writes: build a one-row batch with only the touched columns
+     and run `merge_insert.when_matched_update_all()`. Because the batch
+     only contains the touched columns, every other column on the row is
+     preserved.
+  3. Inspect `MergeResult.num_updated_rows`; raise `ObjectNotFound` if 0.
   4. For each None clear: issue `values_sql` (scalars) or `merge_insert`
-     with null-vector batch (vectors). Null-clears use update-only
-     merge_insert and silently no-op on missing rows.
+     with null-vector batch (vectors). Each clear inspects its own
+     update-count and raises `ObjectNotFound` if the row was not touched
+     and we have not yet proven existence via an earlier write.
+  5. `upsert()` is the same path with `allow_insert=True`: the merge adds
+     `when_not_matched_insert_all()` and post-write no-row is treated as
+     a successful insert rather than `ObjectNotFound`.
 
-- `batch_update([ObjectUpdate, ...], on_missing="raise")`
+- `batch_update([ObjectUpdate, ...])`
   1. Reject duplicate `object_id`s inside the batch (`DuplicateObject`).
-  2. If `on_missing != "insert"`: pre-check existence per id; on missing,
-     either raise `ObjectNotFound` or drop the row from the batch
-     (`"skip"`).
+  2. Single batch existence check: one `IN (...)` query covering every
+     id; raise `ObjectNotFound` for the first missing id.
   3. Collect non-None writes into rows; collect None clears separately.
   4. **Group rows by column signature.** Within a group, every row touches
      the same column set, so `when_matched_update_all()` preserves every
@@ -295,10 +272,11 @@ store.update("x", vectors={"image_clip": None})
      (because a sibling row set `v`), with `v=None` — and
      `when_matched_update_all()` would null-out the original `v` for that
      row. Grouping avoids that failure mode.
-  5. For each group: one `merge_insert` call. With `on_missing="insert"`,
-     the call adds `when_not_matched_insert_all()` so missing rows become
-     partial inserts.
-  6. Issue per-row clears as above.
+  5. For each group: one `merge_insert` call; inspect per-group
+     `num_updated_rows` and raise `ObjectNotFound` for any row deleted
+     concurrently between the pre-check and the write.
+  6. Issue per-row clears; each one inspects its update-count and
+     surfaces `ObjectNotFound` on mid-batch deletion.
 
 ## Search path
 
@@ -349,44 +327,50 @@ occurrence of each id are preserved on the returned `SearchResult`.
 
 ## Concurrency model
 
-Single-writer only. The JSON sidecar is not locked. Concurrent readers are
-safe: LanceDB supports concurrent reads on a table, and the registry is
-re-read on every ObjectVectorDB construction. For multi-writer, route writes
-through a queue consumer running in a single process.
+Concurrent readers are always safe. As of 0.2.0, concurrent writers are also
+safe for `add`, `update`, `upsert`, `delete`, and schema mutations
+(`register_vector_field`, `create_index`, etc.).
 
-### Side effects under the single-writer contract
+### How multi-writer safety works
 
-These are consequences of the single-writer assumption that a caller should
-know about before violating it:
+- **`add()` / `batch_add()`**: use `merge_insert.when_not_matched_insert_all`
+  and inspect `MergeResult.num_inserted_rows`. If 0, the id was already visible
+  at merge read time — `DuplicateObject` is raised. No pre-check, so the TOCTOU
+  window against other merge operations is closed. See "Same-id concurrent
+  inserts" below for the one remaining caveat.
+- **`update()`**: uses `merge_insert.when_matched_update_all` and inspects
+  `MergeResult.num_updated_rows`. If 0, the id was absent (possibly deleted by
+  a concurrent writer) — `ObjectNotFound` is raised. No silent no-op.
+- **`batch_update()`**: performs a single batch existence check (one
+  `IN (...)` query for all ids) before writing. Concurrent deletes between the
+  check and the writes may cause a TOCTOU, but this is far less likely than
+  N per-row checks and is the documented best-effort guarantee.
+- **Schema mutations** (`register_vector_field`, `create_index`,
+  `drop_fields`, `rename_field`): wrapped in `_with_retry` (up to 5 attempts
+  with 50–800 ms exponential backoff) to handle Lance manifest commit conflicts.
+  Vector field metadata is stored in Arrow field metadata on the `__vec_<name>`
+  column; updates go through `replace_field_metadata`, which uses the Lance
+  transactional manifest.
+- **Registry**: vector field records live in Arrow field metadata inside the
+  Lance manifest, which is conflict-retried automatically by LanceDB. No
+  on-disk state outside the manifest.
 
-- **TOCTOU on `add()` / `update()` pre-checks.** `add()` does
-  `count_rows → merge_insert.when_not_matched_insert_all`; `update()` and
-  `batch_update()` do `exists → merge_insert`. A concurrent writer between
-  the check and the merge_insert can cause:
-  - Two `add()` calls with the same id: the loser's `when_not_matched_insert_all`
-    silently no-ops — **no error is raised**, the caller believes the write
-    succeeded.
-  - Concurrent `delete` racing an `update()` with the default
-    `on_missing="raise"`: the merge_insert is update-only, so it silently
-    no-ops and the row stays deleted. The caller sees `update()` return
-    successfully even though no row was written. `batch_update` is the
-    same. Pass `on_missing="insert"` if you want the upsert behavior
-    instead — that path **silently re-inserts a partial row** containing
-    only the columns the update touched; every other column is null. Both
-    behaviors are pinned by tests in `tests/test_update.py`
-    (`test_update_default_silently_noops_when_concurrently_deleted` and
-    `test_update_on_missing_insert_resurrects_partial_row`).
-- **Registry sidecar.** Two processes calling `register_vector_field` or
-  writing schema concurrently can lose one update: each reads the JSON, each
-  writes its own modified copy via `os.replace`. The Lance columns exist, but
-  the registry forgets them — subsequent opens see a "property column
-  starting with `__vec_`" state that property-name validation rejects.
-- **`batch_update` is not atomic across groups.** Rows are split into
-  column-signature groups, each executed as its own `merge_insert`, followed
-  by per-row null-clears. If the process crashes mid-batch, the batch is
-  partially applied. Callers that need atomicity should either keep batches
-  small enough to recover by re-running or integrate with LanceDB's
-  versioning (`table.checkout_latest` / restore).
+### Remaining limitations
+
+- **Same-id concurrent inserts may duplicate.** Lance treats a no-match
+  `merge_insert` as a commutative append, so two writers that both observe
+  "no existing row at read time" can both commit and leave duplicate rows.
+  The SDK cannot fix this — it is a property of the storage layer. For
+  strict same-id uniqueness under concurrency, serialize writes at the
+  system level (typically a single write-service process per URI). See
+  [`docs/concurrency.md`](concurrency.md) for the full design discussion,
+  a reference architecture, and a comparison with how Weaviate, Qdrant,
+  Milvus, Pinecone, and pgvector handle the same problem.
+- **`batch_update` is not atomic across column-signature groups.** Rows with
+  differing column sets are split into N independent `merge_insert` calls. Each
+  call is atomic and conflict-retried; the batch as a whole is not. A crash
+  mid-batch leaves it partially applied. For full atomicity, issue homogeneous
+  batches (same columns for every row).
 - **Search sees an indexed delta.** Vectors added or updated after an IVF
   index was built are searched via LanceDB's unindexed-delta path until the
   next `optimize()` / index refresh. Results are correct, but latency and
@@ -396,5 +380,4 @@ know about before violating it:
   different `dim` after the first registration raises `DimensionMismatch`.
   If the first registration used the wrong dimension and rows already
   reference it, the only recovery is `drop_fields([name])` followed by
-  `register_vector_field(name, correct_dim)` and re-ingest. The registry
-  is the source of truth for `dim`; it cannot be changed in place.
+  `register_vector_field(name, correct_dim)` and re-ingest.

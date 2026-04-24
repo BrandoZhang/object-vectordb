@@ -24,7 +24,6 @@ from .types import (
     ObjectAdd,
     ObjectData,
     ObjectUpdate,
-    OnMissing,
     SearchResult,
     VectorFieldInfo,
 )
@@ -134,9 +133,8 @@ class Collection:
         object_id: str,
         properties: dict[str, Any] | None = None,
         vectors: dict[str, list[float] | None] | None = None,
-        on_missing: OnMissing = "raise",
     ) -> None:
-        self._backend.update(object_id, properties, vectors, on_missing=on_missing)
+        self._backend.update(object_id, properties, vectors)
 
     def upsert(
         self,
@@ -146,17 +144,17 @@ class Collection:
     ) -> None:
         """Insert if missing, merge-update if present.
 
-        Equivalent to `update(object_id, ..., on_missing="insert")`, but named
-        for the common case. Semantics are merge, not replace: fields you do
-        not pass are preserved on existing rows, and missing rows are created
-        as partial rows containing only the fields you passed.
+        Merge semantics: fields you do not pass are preserved on existing rows.
+        If the row does not exist it is inserted as a partial row (only the
+        columns you provided are set; others are null). To avoid corrupted ANN
+        results on concurrent-delete races, supply all registered vector fields
+        when inserting a new row via upsert.
         """
-        self._backend.update(object_id, properties, vectors, on_missing="insert")
+        self._backend.update(object_id, properties, vectors, allow_insert=True)
 
     def batch_update(
         self,
         updates: Iterable[ObjectUpdate],
-        on_missing: OnMissing = "raise",
     ) -> None:
         payload = [
             {
@@ -166,7 +164,7 @@ class Collection:
             }
             for upd in updates
         ]
-        self._backend.batch_update(payload, on_missing=on_missing)
+        self._backend.batch_update(payload)
 
     def drop_fields(self, names: Iterable[str]) -> None:
         self._backend.drop_fields(names)

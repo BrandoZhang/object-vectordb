@@ -123,7 +123,7 @@ ObjectVectorDB             ── DB handle: open URI, create/list/drop collecti
     │
     └── Collection         ── per-collection API (add, get, search, …)
             │
-            ├── SchemaRegistry   ── JSON sidecar, namespaced by collection
+            ├── SchemaRegistry   ── Arrow field metadata on the Lance manifest
             └── LanceDBBackend   ── all lancedb / pyarrow code
 ```
 
@@ -178,8 +178,12 @@ Re-run and update this table whenever the benchmark suite is executed. See
 
 ## Concurrency
 
-Single-writer. Concurrent readers are safe. The JSON registry sidecar is not locked.
-For multi-writer setups, route writes through a single worker process.
+Concurrent readers are always safe. Writes against distinct ids and
+updates/upserts on existing rows are multi-writer safe; schema mutations
+retry on manifest conflicts. Same-id concurrent inserts can produce
+duplicate rows (Lance has no primary-key enforcement) — for strict
+uniqueness under concurrency, put a serialization point in front of the
+SDK. See [`docs/concurrency.md`](docs/concurrency.md).
 
 ## Development
 

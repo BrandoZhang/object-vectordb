@@ -32,7 +32,7 @@ ObjectVectorDB    (db.py)            ← DB handle: open URI, create/list/drop c
     │
     └── Collection  (collection.py)  ← per-collection API: add, get, search, register_vector_field…
             │
-            ├── SchemaRegistry       ← JSON sidecar, scoped per-collection via CollectionRegistry
+            ├── SchemaRegistry       ← Arrow field metadata on the Lance manifest, scoped per-collection via CollectionRegistry
             └── LanceDBBackend       ← all lancedb + pyarrow code; one backend per Collection
 ```
 
@@ -45,11 +45,11 @@ ObjectVectorDB    (db.py)            ← DB handle: open URI, create/list/drop c
 
 **Properties vs. vectors are separate namespaces.** The API takes them as distinct arguments. Internally, vector columns are prefixed `__vec_<name>`; property names are rejected if they start with that prefix. Property names otherwise are stored as-is.
 
-**Vector fields must be registered before use, per collection.** `collection.register_vector_field(name, dim)` adds a zero-copy `FixedSizeList<float32, dim>` column via LanceDB's `table.add_columns(pa.field(...))`. Registration is tracked in a JSON sidecar at `<uri>/object_vectordb_registry.json`, namespaced by collection name — NOT inside the Lance table. The registry is the source of truth for which collections exist, which columns are vectors vs. properties within each collection, each vector's dim, and each vector's index config.
+**Vector fields must be registered before use, per collection.** `collection.register_vector_field(name, dim)` adds a zero-copy `FixedSizeList<float32, dim>` column via LanceDB's `table.add_columns(pa.field(...))`. Registration is tracked in Arrow field metadata on each `__vec_<name>` column inside the Lance manifest (keys: `ovdb_dim`, `ovdb_description`, `ovdb_index`). Collection ownership is marked by an `ovdb_schema_version` sentinel on the `object_id` field. There is no on-disk state outside the Lance manifest.
 
 **Schema grows automatically for properties.** Property columns are added on first write via Arrow-type inference from the sample value (`arrow_utils.python_value_to_arrow_type`). `None` alone cannot be inferred and raises `SchemaError`.
 
-**Merge-update semantics.** `update()` and `batch_update()` only touch fields the caller passes. `None` clears a field on a specific object (the column stays, the cell becomes null). Both methods take `on_missing: Literal["raise", "insert", "skip"] = "raise"` controlling behavior when the target id is absent: default raises `ObjectNotFound` and runs an update-only merge_insert (so a concurrent delete causes a silent no-op, not a partial re-insert); `"insert"` opts into upsert (partial re-insert allowed); `"skip"` silently no-ops on missing ids.
+**Merge-update semantics.** `update()` and `batch_update()` only touch fields the caller passes. `None` clears a field on a specific object (the column stays, the cell becomes null). `update()` always raises `ObjectNotFound` when the target id is absent — use `upsert()` for insert-if-missing.
 
 ## Non-obvious LanceDB behaviors we encode
 
@@ -58,9 +58,9 @@ These are load-bearing — changing them quietly will break tests and correctnes
 - **Null round-trip bugs (LanceDB #1325, #3105).** `table.update(values={col: None})` does not reliably round-trip. We use `values_sql={col: "CAST(NULL AS <sql_type>)"}` for scalar null-clearing and `merge_insert` with an Arrow-null FixedSizeList for vector null-clearing. The `arrow_type_to_sql_type` mapping lives in `arrow_utils.py`.
 - **`batch_update` groups rows by column signature.** A single `merge_insert(...).when_matched_update_all()` call treats missing source columns as null overwrites. Without grouping, a row that specifies only `{"n": 1}` in the same batch as a sibling that sets `{"v": [...]}` would null-out `v` on the first row. See `_apply_update` and the grouping in `batch_update` in `backend.py`.
 - **No auto-column-infer on `table.add`.** The backend always calls `add_columns(pa.field(...))` before an insert that references a new property or vector column.
-- **No primary-key uniqueness.** `add()` does a `count_rows("object_id = 'x'")` pre-check and raises `DuplicateObject`. `update()` does the same pre-check and raises `ObjectNotFound`. Race-prone under concurrent writers — documented as single-writer only.
-- **`batch_update` rejects duplicate ids within a single batch.** `merge_insert` against multiple source rows sharing a key is implementation-defined in LanceDB, and column-signature grouping makes apply-order unreliable. `batch_update` raises `DuplicateObject` on intra-batch duplicates, mirroring `batch_add`. See `docs/architecture.md` "Concurrency model → Side effects" for the remaining single-writer caveats (TOCTOU on `add`/`update`, update-vs-delete resurrection, registry sidecar races, batch non-atomicity, search-delta staleness).
-- **Index metric wins at search time.** Once an index exists, LanceDB ignores the caller's `distance_type()`. We read the stored metric from the registry and raise `MetricMismatch` if the caller passes a conflicting `metric=`. Do not soften this to a warning.
+- **No primary-key uniqueness at the storage layer.** Lance has no PK concept. `add()` uses `merge_insert.when_not_matched_insert_all` and raises `DuplicateObject` via `MergeResult.num_inserted_rows == 0`. `update()` uses `when_matched_update_all` and raises `ObjectNotFound` via `num_updated_rows == 0`. Distinct-id writes and update/upsert on existing rows are multi-writer safe; same-id concurrent inserts can still produce duplicate rows (commutative-append semantics) — see `docs/concurrency.md`.
+- **`batch_update` rejects duplicate ids within a single batch.** `merge_insert` against multiple source rows sharing a key is implementation-defined in LanceDB, and column-signature grouping makes apply-order unreliable. `batch_update` raises `DuplicateObject` on intra-batch duplicates, mirroring `batch_add`. See `docs/concurrency.md` for the full multi-writer story.
+- **Index metric wins at search time.** Once an index exists, LanceDB ignores the caller's `distance_type()`. We read the stored metric from Arrow field metadata (`ovdb_index`) and raise `MetricMismatch` if the caller passes a conflicting `metric=`. Do not soften this to a warning.
 - **Renaming an indexed vector column orphans the index.** `rename_field()` drops the index, renames the column, then recreates the index using the stored config.
 
 ## Score conversion
@@ -79,6 +79,7 @@ Logic is in `scoring.py`. If you add a new metric, add a calibration test in `te
 
 - `docs/concepts.md` — mental model (objects, properties, vectors, registration).
 - `docs/architecture.md` — design, LanceDB API usage table, full gotcha list, write-path walkthroughs for add / update / batch_update.
+- `docs/concurrency.md` — multi-writer design decision, reference write-service architecture, and comparison with Weaviate / Qdrant / Milvus / Pinecone / pgvector.
 - `docs/api.md` — full public API reference.
 - `docs/filters.md` — DataFusion SQL `where=` syntax.
 - `docs/testing.md` — what each test file covers and the v1 gate tests.
