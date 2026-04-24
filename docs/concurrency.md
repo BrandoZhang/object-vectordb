@@ -200,6 +200,66 @@ pattern into an application-level process, because Lance does not ship
 with one. See [`docs/comparison.md § 7`](comparison.md#7-multi-writer-handling-across-backends)
 for the full comparison table and per-backend commentary.
 
+## Known limitations and deferred work
+
+Beyond the same-id insert race, a few smaller concurrency-adjacent issues
+remain open.  None of them block the intended use (single-writer or
+write-service-fronted deployments), but system designers should be aware of
+them before scaling out or mixing readers and writers against an object
+store.
+
+- **`list_collections()` / `has_collection()` on S3 are O(N) manifest GETs.**
+  Each check opens every table to read the `ovdb_schema_version` sentinel.
+  For buckets with hundreds of collections this is a latency footgun on any
+  caller that polls these methods.  If you need frequent discovery, cache
+  the result at the application layer and invalidate on collection
+  create/drop.
+
+- **`drop_collection()` is not concurrency-safe.**
+  `ObjectVectorDB.drop_collection(name)` issues an unguarded
+  `drop_table(name)`.  If any other process or thread has the table open
+  for writing, you may corrupt the in-flight transaction or leak files on
+  the object store.  Drop collections only when you control all writers
+  against the URI.
+
+- **`set_index()` is read-then-write, not compare-and-swap.**
+  Two concurrent `set_index` / `update_description` calls can clobber each
+  other's metadata (last-writer-wins).  Serialize index configuration
+  changes if you care about the losing writer's value.
+
+- **`batch_update` builds an `IN (...)` clause over every id in the batch.**
+  DataFusion's SQL engine has implementation-defined limits on `IN` list
+  length.  For batches of tens of thousands of ids, chunk the call at the
+  application layer.
+
+- **Schema cache staleness is not yet audited.**
+  `CollectionRegistry._read_vec_meta` reads `Table.schema.field(col).metadata`
+  directly.  Whether LanceDB refreshes the schema on every property access
+  or caches it is not verified; in the cached case, a reader could see
+  stale metric / index config after another writer updated it.  The
+  practical workaround is to re-open `ObjectVectorDB` periodically in
+  long-lived reader processes.
+
+- **Sentinel `ovdb_schema_version` is hard-coded to `"1"`.**
+  There is no forward-compat path for bumping the schema version.  Future
+  releases will need to decide whether to accept-any-value with
+  upgrade-on-write, or treat an unknown version as an error.
+
+- **Thread-safety of a shared `Collection` handle** is assumed (the
+  multi-writer test suite exercises this implicitly), but not explicitly
+  promised in the API contract.  If you run contended multi-threaded
+  writers through a single `Collection`, you are relying on Lance's
+  internal synchronization.
+
+- **Migration is silently skipped on object-store URIs.**
+  `_migrate_sidecar_if_needed` uses `pathlib.Path(uri).exists()`, which
+  returns `False` for `s3://…` and similar URIs.  A user migrating an
+  existing local Lance directory to S3 will not get the
+  sidecar → Arrow-field-metadata migration and their collections will not
+  be discoverable by `list_collections()`.  A proper fix is tracked
+  separately; for now, run the migration against a local mount before
+  uploading to object storage.
+
 ## Choosing an approach
 
 | Requirement                                       | Recommended approach                          |

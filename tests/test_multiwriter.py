@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytest
 
 from object_vectordb import DuplicateObject, ObjectNotFound, ObjectVectorDB
-from object_vectordb.exceptions import DimensionMismatch
+from object_vectordb.exceptions import DimensionMismatch, SchemaError
 from object_vectordb.types import ObjectUpdate
 
 # ---------------------------------------------------------------------------
@@ -358,3 +358,81 @@ def test_batch_update_raises_when_row_deleted_mid_batch(tmp_path):
                 ObjectUpdate(object_id="b", properties={"n": 20}),
             ]
         )
+
+
+# ---------------------------------------------------------------------------
+# N1: property-column type race detection
+# ---------------------------------------------------------------------------
+
+
+def test_verify_property_column_type_raises_on_mismatch(tmp_path):
+    """N1 unit test: _verify_property_column_type must raise SchemaError when
+    the existing column's Arrow type differs from the inferred type."""
+    import pyarrow as pa
+
+    db = ObjectVectorDB(uri=str(tmp_path / "db"))
+    col = db.collection("c")
+    backend = col._backend
+
+    # Seed a string-typed property column.
+    col.add("a", properties={"field": "hello"})
+
+    # Matching type — no raise.
+    backend._verify_property_column_type("field", pa.string())
+
+    # Mismatched type — must raise.
+    with pytest.raises(SchemaError, match="already exists with type"):
+        backend._verify_property_column_type("field", pa.int64())
+
+    # Missing column entirely — must raise a SchemaError (different message).
+    with pytest.raises(SchemaError, match="Expected column"):
+        backend._verify_property_column_type("ghost", pa.int64())
+
+
+def test_concurrent_property_add_different_types(tmp_path):
+    """N1 integration test: two threads adding the same property with
+    different inferred types must not silently desync column vs. values.
+
+    Depending on thread scheduling, one of three outcomes is legal:
+      (a) Both serialize — one defines the type, the other's value is coerced
+          into it at encode time (existing single-writer behavior).
+      (b) Both reach add_columns; the loser's "already exists" catch runs
+          _verify_property_column_type and raises SchemaError.
+      (c) Both reach add_columns and agreed on a type (unlikely for int/str).
+
+    What must NOT happen: metadata desync — the column's actual Arrow type
+    must agree with at least one writer's intent.
+    """
+    import pyarrow as pa
+
+    db = ObjectVectorDB(uri=str(tmp_path / "db"))
+    col = db.collection("c")
+
+    barrier = threading.Barrier(2)
+    outcomes: list[tuple[str, object, object]] = []
+    lock = threading.Lock()
+
+    def do_add(oid: str, value: object) -> None:
+        barrier.wait()
+        try:
+            col.add(oid, properties={"newprop": value})
+            with lock:
+                outcomes.append(("ok", oid, value))
+        except SchemaError as exc:
+            with lock:
+                outcomes.append(("schema_error", oid, str(exc)))
+
+    t1 = threading.Thread(target=do_add, args=("a", "hello"))
+    t2 = threading.Thread(target=do_add, args=("b", 42))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    # Actual column type exists and is one of the two possibilities.
+    actual_type = col._backend._table.schema.field("newprop").type
+    assert actual_type in (pa.string(), pa.int64())
+
+    # At least one writer completed successfully.
+    oks = [o for o in outcomes if o[0] == "ok"]
+    assert oks

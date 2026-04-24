@@ -46,6 +46,43 @@ OBJECT_ID_COLUMN = "object_id"
 DEFAULT_METRIC = "cosine"
 _UNBOUNDED_LIMIT = 2**31 - 1
 
+# Probe for Lance's typed "already exists" exception so we can prefer
+# isinstance-matching over fragile message-string matching.  The class name has
+# moved between Lance releases, so we try several and fall back to string match.
+_LanceAlreadyExists: tuple[type[BaseException], ...] = ()
+for _candidate in ("AlreadyExistsError", "TableAlreadyExistsError"):
+    try:
+        _cls = getattr(__import__("lancedb._lancedb", fromlist=[_candidate]), _candidate)
+        _LanceAlreadyExists = (*_LanceAlreadyExists, _cls)
+    except (ImportError, AttributeError):
+        pass
+
+
+def _is_already_exists(exc: BaseException) -> bool:
+    """Return True if exc signals that the target already exists.
+
+    Covers two distinct Lance error surfaces that both mean "a concurrent
+    writer got there first":
+
+      * "already exists" — raised when the target (table / column / index)
+        exists with a definition compatible with ours.
+      * "type conflicts" — raised by Lance on a retried add_columns whose
+        column was committed first by a concurrent writer with a different
+        Arrow type or FixedSizeList dim.  We treat this the same as "already
+        exists" so that _verify_property_column_type / _verify_vector_column_dim
+        can produce a clean SchemaError / DimensionMismatch instead of letting
+        a raw RuntimeError leak to the caller.
+
+    Consolidates the string-match logic used across _ensure_table,
+    _ensure_property_column, _ensure_vector_column, register_vector_field, and
+    _ensure_object_id_index.  If LanceDB exposes typed exceptions for these in
+    the future, adding them to _LanceAlreadyExists above is the only change.
+    """
+    if _LanceAlreadyExists and isinstance(exc, _LanceAlreadyExists):
+        return True
+    msg = str(exc).lower()
+    return "already exists" in msg or "type conflicts" in msg
+
 
 def _quote_literal(value: str) -> str:
     """Quote a string literal for a DataFusion SQL expression."""
@@ -87,7 +124,7 @@ class LanceDBBackend:
                 created = True
             except (OSError, RuntimeError, ValueError) as exc:
                 # Concurrent writer created the table first — open it instead.
-                if "already exists" not in str(exc).lower():
+                if not _is_already_exists(exc):
                     raise
                 table = self._db.open_table(self._table_name)
         # Index creation is mandatory on new tables (we hold write access) and
@@ -104,11 +141,14 @@ class LanceDBBackend:
             if getattr(idx, "columns", None) == [OBJECT_ID_COLUMN]:
                 return
         try:
-            table.create_scalar_index(OBJECT_ID_COLUMN, index_type="BTREE")
+            _with_retry(table.create_scalar_index, OBJECT_ID_COLUMN, index_type="BTREE")
         except Exception as exc:
-            # Already-exists race, read-only credentials, or transient commit
-            # conflict — non-fatal on existing tables.  Re-raise only when we
-            # just created the table and genuinely need the index.
+            # A concurrent writer just created the same index — always treat as
+            # success, even when required=True: the end state is what we wanted.
+            if _is_already_exists(exc):
+                return
+            # Other failures (read-only credentials, transient errors) are only
+            # fatal when we just created the table and genuinely need the index.
             if required:
                 raise
             log.debug("Could not create object_id BTREE index (non-fatal): %s", exc)
@@ -136,9 +176,30 @@ class LanceDBBackend:
         try:
             _with_retry(self._table.add_columns, pa.field(name, dtype))
         except RuntimeError as exc:
-            # Concurrent writer added the same column first — treat as success.
-            if "already exists" not in str(exc).lower():
+            if not _is_already_exists(exc):
                 raise
+            # Concurrent writer added this property first.  Verify the winner's
+            # inferred Arrow type matches ours; otherwise the caller would
+            # silently coerce the value into the winner's type at encode time.
+            self._verify_property_column_type(name, dtype)
+
+    def _verify_property_column_type(self, name: str, inferred_dtype: pa.DataType) -> None:
+        """Assert the existing property column has the type we'd have inferred.
+
+        Called after a "column already exists" race — a concurrent writer may
+        have added the column with a different inferred type (e.g. int64 from
+        an int sample vs. string from ours), which would otherwise silently
+        coerce our value into the winner's type at merge_insert time.
+        """
+        try:
+            actual_type = self._table.schema.field(name).type
+        except KeyError:
+            raise SchemaError(f"Expected column {name!r} to exist after add_columns.") from None
+        if actual_type != inferred_dtype:
+            raise SchemaError(
+                f"Property column {name!r} already exists with type {actual_type}; "
+                f"cannot write a value that would have been inferred as {inferred_dtype}."
+            )
 
     def _ensure_vector_column(self, name: str, dim: int) -> VectorFieldRecord:
         column = self._registry.vector_column(name)
@@ -151,7 +212,7 @@ class LanceDBBackend:
             try:
                 _with_retry(self._table.add_columns, pa.field(column, pa.list_(pa.float32(), dim)))
             except RuntimeError as exc:
-                if "already exists" not in str(exc).lower():
+                if not _is_already_exists(exc):
                     raise
         self._verify_vector_column_dim(name, column, dim)
         return self._registry.add_vector(name, dim)
@@ -198,7 +259,7 @@ class LanceDBBackend:
             try:
                 _with_retry(self._table.add_columns, pa.field(column, pa.list_(pa.float32(), dim)))
             except RuntimeError as exc:
-                if "already exists" not in str(exc).lower():
+                if not _is_already_exists(exc):
                     raise
         self._verify_vector_column_dim(name, column, dim)
         rec = self._registry.add_vector(name, dim, description)

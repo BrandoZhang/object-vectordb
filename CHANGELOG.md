@@ -52,6 +52,20 @@
   - `_ensure_object_id_index` is now best-effort on existing tables:
     read-only readers (or concurrent writers racing on first open) no
     longer crash.  On newly-created tables it is still required.
+  - Property-column type race: concurrent `add` / `update` calls against
+    the same new property name with different inferred Arrow types now
+    raise `SchemaError` on the losing writer (covering both Lance's
+    "already exists" and "type conflicts" error forms) instead of
+    silently coercing one writer's value into the other writer's column
+    type.  See `_verify_property_column_type`.
+  - Scalar-index creation for `object_id` is now wrapped in `_with_retry`
+    and treats "already exists" as success unconditionally, so
+    concurrent first-open of a brand-new table no longer races on
+    `create_scalar_index`.
+  - `"already exists"` string-matching is consolidated behind a single
+    `_is_already_exists` helper that also probes for typed exceptions at
+    import time, reducing the blast radius of a future LanceDB error
+    format change.
 
 - **`upsert()` remains the only insert-if-missing path.**
   Callers that previously used `update(..., on_missing="insert")` should switch to
