@@ -20,6 +20,13 @@
 
 ### New features
 
+- **`storage_options` passthrough on `ObjectVectorDB(uri=…, storage_options=…)`.**
+  Forwarded to `lancedb.connect`.  Required for multi-writer deployments
+  against S3 / object stores so Lance can coordinate manifest commits
+  (conditional PUT, external commit lock, etc.).  Without it, concurrent
+  writers to the same object-store URI can silently clobber each other's
+  manifest commits.  See docs/concurrency.md.
+
 - **Multi-writer support.**
   - `add()` and `batch_add()` use `MergeResult.num_inserted_rows` instead of a
     pre-check `count_rows` query to detect duplicate ids.  No TOCTOU window.
@@ -32,6 +39,19 @@
     commit conflicts with bounded exponential backoff (5 attempts, 50–800 ms).
   - Concurrent `add_columns` calls for the same column name are idempotent
     ("column already exists" errors are swallowed).
+  - Concurrent `create_table` for the same collection name no longer
+    races — one writer creates, the rest fall through to `open_table`.
+  - Concurrent `register_vector_field` (or auto-register) with **different
+    dims** now detects the mismatch after the "already exists" race and
+    raises `DimensionMismatch`, rather than writing conflicting dim
+    metadata over the actual column type.
+  - `batch_update` now checks `MergeResult.num_updated_rows` per
+    column-signature group (and `UpdateResult.rows_updated` on null-clear
+    ops) to catch rows deleted concurrently between the pre-check and the
+    write.  Previously the batch silently skipped those rows.
+  - `_ensure_object_id_index` is now best-effort on existing tables:
+    read-only readers (or concurrent writers racing on first open) no
+    longer crash.  On newly-created tables it is still required.
 
 - **`upsert()` remains the only insert-if-missing path.**
   Callers that previously used `update(..., on_missing="insert")` should switch to

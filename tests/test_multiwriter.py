@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytest
 
 from object_vectordb import DuplicateObject, ObjectNotFound, ObjectVectorDB
+from object_vectordb.exceptions import DimensionMismatch
+from object_vectordb.types import ObjectUpdate
 
 # ---------------------------------------------------------------------------
 # Concurrent add
@@ -238,3 +240,121 @@ def test_concurrent_register_same_field_is_idempotent(tmp_path):
     fields = col.list_vector_fields()
     assert len(fields) == 1
     assert fields[0].dim == 4
+
+
+def test_concurrent_register_different_dims_detected(tmp_path):
+    """C2: two writers register the same field with DIFFERENT dims.
+
+    One writer's add_columns wins at the column type; the loser must raise
+    DimensionMismatch after catching "already exists", not silently write
+    its own dim into the metadata and desync from the actual column.
+    """
+    import pyarrow as pa
+
+    from object_vectordb.registry import VECTOR_COLUMN_PREFIX
+
+    db = ObjectVectorDB(uri=str(tmp_path / "db"))
+    col = db.collection("c")
+
+    barrier = threading.Barrier(2)
+    errors: list[tuple[int, Exception]] = []
+    successes: list[int] = []
+
+    def register(dim: int) -> None:
+        barrier.wait()
+        try:
+            col.register_vector_field("v", dim=dim)
+            successes.append(dim)
+        except DimensionMismatch as exc:
+            errors.append((dim, exc))
+
+    t1 = threading.Thread(target=register, args=(4,))
+    t2 = threading.Thread(target=register, args=(8,))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    fields = col.list_vector_fields()
+    assert len(fields) == 1
+    registered_dim = fields[0].dim
+    assert registered_dim in {4, 8}
+
+    # The actual column's dim must agree with the metadata (the bug being
+    # fixed was exactly this divergence).
+    actual_type = col._backend._table.schema.field(VECTOR_COLUMN_PREFIX + "v").type
+    assert isinstance(actual_type, pa.FixedSizeListType)
+    assert actual_type.list_size == registered_dim
+
+    # One writer succeeded; one observed the race and raised DimensionMismatch.
+    # (If scheduling fully serialized them, both might "succeed" from their
+    # own perspective — but the second must have seen the first's value via
+    # the existing-metadata fast path, so only one dim can appear.)
+    assert len(successes) + len(errors) == 2
+
+
+# ---------------------------------------------------------------------------
+# H1: concurrent create_table
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_collection_creation_same_name(tmp_path):
+    """H1: two threads opening the same new collection must not race on
+    create_table.  Both should end up with a valid handle."""
+    db = ObjectVectorDB(uri=str(tmp_path / "db"))
+
+    barrier = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def open_collection() -> None:
+        barrier.wait()
+        try:
+            db.collection("shared")
+        except Exception as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=open_collection)
+    t2 = threading.Thread(target=open_collection)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert not errors
+    assert "shared" in db.list_collections()
+
+
+# ---------------------------------------------------------------------------
+# H2: batch_update detects rows deleted between pre-check and write
+# ---------------------------------------------------------------------------
+
+
+def test_batch_update_raises_when_row_deleted_mid_batch(tmp_path):
+    """H2: simulate the delete-between-precheck-and-write window by patching
+    _find_missing_ids to lie (say "all exist"), then deleting a row before
+    the merge_insert runs.  The per-group num_updated_rows check must catch
+    the missing row."""
+    db = ObjectVectorDB(uri=str(tmp_path / "db"))
+    col = db.collection("c")
+    col.add("a", properties={"n": 1})
+    col.add("b", properties={"n": 2})
+
+    # Stage the race: delete "a" after pre-check is satisfied.
+    original = col._backend._find_missing_ids
+
+    def lying_precheck(ids: list[str]) -> list[str]:
+        missing = original(ids)
+        # After the (truthful) pre-check, delete "a" so the write finds
+        # only "b".
+        col.delete("a")
+        return missing
+
+    col._backend._find_missing_ids = lying_precheck  # type: ignore[method-assign]
+
+    with pytest.raises(ObjectNotFound):
+        col.batch_update(
+            [
+                ObjectUpdate(object_id="a", properties={"n": 10}),
+                ObjectUpdate(object_id="b", properties={"n": 20}),
+            ]
+        )

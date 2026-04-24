@@ -43,6 +43,38 @@ t=4                                 commit → V+2                 V+2  (2 rows!
                                      conflict is raised)
 ```
 
+## S3 and other object stores: Lance commit coordination is required
+
+Before anything else: if your URI is `s3://…` (or any other object store)
+and more than one process writes to it, **you must configure Lance's
+commit coordination** via `storage_options`. Lance writes its manifest as
+plain `PutObject` by default, and two concurrent writers can both PUT the
+same manifest version — the later write silently clobbers the earlier
+one, losing rows and schema changes with no error on either side. This
+is distinct from the same-id insert race above: it affects *all* writes,
+including distinct-id inserts and updates that would otherwise be safe.
+
+`storage_options` is passed through from `ObjectVectorDB`:
+
+```python
+db = ObjectVectorDB(
+    uri="s3://my-bucket/my-db",
+    storage_options={
+        # Exact keys depend on your LanceDB version and the store; see the
+        # LanceDB object-store docs for the current names.  The two
+        # supported mechanisms are:
+        #   (a) S3 conditional PUT (If-None-Match), or
+        #   (b) an external commit lock (historically DynamoDB).
+    },
+)
+```
+
+If every writer goes through a single write-service process (the
+reference architecture below), the concurrent-manifest-commit window does
+not occur in practice and `storage_options` can be left empty. You are
+then responsible for ensuring exactly one writer process per URI at a
+time.
+
 ## Design decision: where the constraint lives
 
 Concurrency correctness has to be enforced by the component that **owns**

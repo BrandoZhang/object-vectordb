@@ -74,6 +74,7 @@ class LanceDBBackend:
     # ------------------------------------------------------------------
 
     def _ensure_table(self):
+        created = False
         if self._table_name in self._db.table_names():
             table = self._db.open_table(self._table_name)
         else:
@@ -81,18 +82,36 @@ class LanceDBBackend:
             schema = pa.schema(
                 [pa.field(OBJECT_ID_COLUMN, pa.string(), nullable=False, metadata=sentinel_meta)]
             )
-            table = self._db.create_table(self._table_name, schema=schema)
-        self._ensure_object_id_index(table)
+            try:
+                table = self._db.create_table(self._table_name, schema=schema)
+                created = True
+            except (OSError, RuntimeError, ValueError) as exc:
+                # Concurrent writer created the table first — open it instead.
+                if "already exists" not in str(exc).lower():
+                    raise
+                table = self._db.open_table(self._table_name)
+        # Index creation is mandatory on new tables (we hold write access) and
+        # best-effort on existing ones (a reader may have no write permission,
+        # or a concurrent writer may have just created the index).
+        self._ensure_object_id_index(table, required=created)
         return table
 
     @staticmethod
-    def _ensure_object_id_index(table) -> None:
+    def _ensure_object_id_index(table, required: bool = False) -> None:
         # BTREE on object_id turns every per-row existence check and id lookup
         # from O(N) scans into O(log N).
         for idx in table.list_indices():
             if getattr(idx, "columns", None) == [OBJECT_ID_COLUMN]:
                 return
-        table.create_scalar_index(OBJECT_ID_COLUMN, index_type="BTREE")
+        try:
+            table.create_scalar_index(OBJECT_ID_COLUMN, index_type="BTREE")
+        except Exception as exc:
+            # Already-exists race, read-only credentials, or transient commit
+            # conflict — non-fatal on existing tables.  Re-raise only when we
+            # just created the table and genuinely need the index.
+            if required:
+                raise
+            log.debug("Could not create object_id BTREE index (non-fatal): %s", exc)
 
     def _table_columns(self) -> set[str]:
         return set(self._table.schema.names)
@@ -134,7 +153,24 @@ class LanceDBBackend:
             except RuntimeError as exc:
                 if "already exists" not in str(exc).lower():
                     raise
+        self._verify_vector_column_dim(name, column, dim)
         return self._registry.add_vector(name, dim)
+
+    def _verify_vector_column_dim(self, name: str, column: str, dim: int) -> None:
+        """Assert the existing column is a FixedSizeList with the requested dim.
+
+        Called after a "column already exists" race — the concurrent winner
+        may have used a different dim than we asked for, which would otherwise
+        silently corrupt the metadata/column agreement.
+        """
+        try:
+            actual_type = self._table.schema.field(column).type
+        except KeyError:
+            raise SchemaError(f"Expected column {column!r} to exist after add_columns.") from None
+        if not isinstance(actual_type, pa.FixedSizeListType):
+            raise SchemaError(f"Column {column!r} exists but is not a vector column.")
+        if actual_type.list_size != dim:
+            raise DimensionMismatch(name, actual_type.list_size, dim)
 
     # ------------------------------------------------------------------
     # Vector field registration
@@ -164,6 +200,7 @@ class LanceDBBackend:
             except RuntimeError as exc:
                 if "already exists" not in str(exc).lower():
                     raise
+        self._verify_vector_column_dim(name, column, dim)
         rec = self._registry.add_vector(name, dim, description)
         return self._vector_field_info(rec)
 
@@ -422,12 +459,23 @@ class LanceDBBackend:
             groups.setdefault(key, []).append(row)
         for rows in groups.values():
             table = self._batch_from_rows(rows)
-            self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all().execute(table)
+            result = (
+                self._table.merge_insert(OBJECT_ID_COLUMN).when_matched_update_all().execute(table)
+            )
+            if result.num_updated_rows < len(rows):
+                group_ids = [row[OBJECT_ID_COLUMN] for row in rows]
+                missing = self._find_missing_ids(group_ids)
+                if missing:
+                    raise ObjectNotFound(missing[0])
 
         for object_id, prop in null_scalar_ops:
-            self._clear_scalar(object_id, prop)
+            result = self._clear_scalar(object_id, prop)
+            if result.rows_updated == 0:
+                raise ObjectNotFound(object_id)
         for object_id, vec in null_vector_ops:
-            self._clear_vector(object_id, vec)
+            result = self._clear_vector(object_id, vec)
+            if result.num_updated_rows == 0:
+                raise ObjectNotFound(object_id)
 
     def _apply_update(
         self,

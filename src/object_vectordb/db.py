@@ -27,9 +27,23 @@ class ObjectVectorDB:
         db.drop_collection("images")
     """
 
-    def __init__(self, uri: str):
+    def __init__(self, uri: str, storage_options: dict[str, str] | None = None):
+        """Open (or lazily create) a LanceDB directory.
+
+        `storage_options` is forwarded to `lancedb.connect` and is the only
+        way to enable Lance's multi-writer commit coordination on object
+        stores.  For S3 with concurrent writers, Lance requires either an
+        external commit lock (e.g. DynamoDB) or server-side conditional PUT;
+        without one of these, concurrent manifest commits silently clobber
+        each other and rows / schema changes are lost.  See
+        docs/concurrency.md and the LanceDB storage docs for the current
+        option names.
+        """
         self._uri = uri
-        self._db = lancedb.connect(uri)
+        connect_kwargs: dict[str, object] = {}
+        if storage_options is not None:
+            connect_kwargs["storage_options"] = storage_options
+        self._db = lancedb.connect(uri, **connect_kwargs)
         self._registry = SchemaRegistry(uri, self._db)
 
     def collection(self, name: str, auto_register: bool = False) -> Collection:
