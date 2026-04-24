@@ -189,10 +189,10 @@ layer should know them:
   mixes `{"n": 1}` and `{"v": [...]}` rows would null-out `v` on the first
   row without column-signature grouping. See [`CLAUDE.md`](../CLAUDE.md)
   line 59.
-- **JSON registry sidecar is not transactional.** *(Resolved in 0.2.0.)*
-  Vector field records now live in Arrow field metadata inside the Lance
-  manifest and are conflict-retried by LanceDB. Old sidecars are
-  auto-migrated on first open.
+- **Vector field registry lives in Arrow field metadata on the Lance
+  manifest**, not a separate file. Conflict-retried by LanceDB, no
+  cross-file atomicity hazard, no separate storage-abstraction code path
+  for object-store URIs.
 
 ## 7. Multi-writer handling across backends
 

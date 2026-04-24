@@ -20,14 +20,18 @@ The API deliberately uses only Python-native types (`str`, `int`, `float`,
 ### Constructor
 
 ```python
-ObjectVectorDB(uri: str)
+ObjectVectorDB(uri: str, storage_options: dict[str, str] | None = None)
 ```
 
-- `uri` — local directory path or a cloud URI (`s3://...`) that LanceDB can
-  open. The schema registry JSON sidecar is written inside this directory.
+- `uri` — local directory path or a cloud URI (`s3://…`) that LanceDB can
+  open. Collection metadata is stored in the Lance manifest; there is no
+  on-disk sidecar state.
+- `storage_options` — forwarded to `lancedb.connect`. Required on S3 (and
+  other object stores) with multiple concurrent writers, so Lance can
+  coordinate manifest commits; see `docs/concurrency.md`.
 
-Construction is cheap: it opens the LanceDB directory and reads the registry
-sidecar. No collections are created; call `collection()` to open/create one.
+Construction is cheap: it opens the LanceDB directory. No collections are
+created; call `collection()` to open/create one.
 
 ---
 

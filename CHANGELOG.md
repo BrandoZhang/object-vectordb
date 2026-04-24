@@ -9,11 +9,12 @@
   there is no silent skip or implicit insert path.
   Use `upsert()` for insert-if-missing semantics.
 
-- **Registry format: JSON sidecar → Arrow field metadata.**
-  Vector field records (dim, description, index config) are now stored in the
-  Arrow field metadata of each `__vec_<name>` column inside the Lance manifest.
-  The old `object_vectordb_registry.json` sidecar is auto-migrated on first open
-  of an existing URI and then deleted.  There is no manual migration step.
+- **Registry format: Arrow field metadata, no sidecar.**
+  Vector field records (dim, description, index config) are stored in the
+  Arrow field metadata of each `__vec_<name>` column inside the Lance
+  manifest; collection ownership is marked by an `ovdb_schema_version`
+  sentinel on the `object_id` field.  There is no on-disk registry state
+  outside the Lance manifest.
 
 - **`OnMissing` type removed** from `object_vectordb.types` and from the public
   `__all__` export.

@@ -23,7 +23,8 @@ src/object_vectordb/
 ├── backend.py       # LanceDBBackend — all LanceDB + pyarrow code. One instance
 │                    #   per Collection; receives a shared lancedb connection.
 ├── registry.py      # SchemaRegistry (root) + CollectionRegistry (per-collection
-│                    #   proxy). JSON sidecar with two-level structure.
+│                    #   proxy). No on-disk state — reads/writes Arrow field
+│                    #   metadata on the Lance manifest.
 ├── fusion.py        # rrf_merge — module-level rank-fusion utility.
 ├── scoring.py       # Per-metric distance → similarity score conversion.
 └── arrow_utils.py   # Python-value → pyarrow-type inference, record-batch helpers.
@@ -36,7 +37,7 @@ ObjectVectorDB   (public, DB handle)
     │
     └── Collection   (public, per-collection operations)
             │
-            ├── CollectionRegistry   (scoped view of the JSON sidecar)
+            ├── CollectionRegistry   (scoped view of Arrow field metadata)
             └── LanceDBBackend        (lancedb + pyarrow)
 ```
 
@@ -51,74 +52,46 @@ no abstract base class and no registry of backends. Just disciplined layering.
 
 ## Schema registry
 
-The registry is a JSON file written next to the Lance table directory:
+Collection and vector-field metadata lives **inside the Lance manifest**,
+as Arrow field metadata on specific columns. There is no on-disk state
+outside `<uri>/<table_name>.lance/`:
 
-```
-<uri>/
-├── <table_name>.lance/                  # LanceDB's own files
-└── object_vectordb_registry.json           # our metadata sidecar
-```
+| Where                                       | What                                                          |
+|---------------------------------------------|---------------------------------------------------------------|
+| `object_id` field metadata                  | `ovdb_schema_version = "1"` — the sentinel that marks a table as ours |
+| `__vec_<name>` field metadata               | `ovdb_dim`, `ovdb_description`, `ovdb_index` (JSON-encoded index config) |
+| Property columns                            | Inferred from the table schema at read time; no registry entry needed |
 
-It tracks:
+`list_collections()` walks `db.table_names()` and keeps the ones whose
+`object_id` field carries the sentinel, so foreign Lance tables dropped
+into the same URI are invisible to the SDK.
 
-- Which columns are vector fields vs. properties.
-- Each vector field's dimensionality.
-- Each vector field's optional human description.
-- Each vector field's index configuration (type, metric, and the originally-passed
-  `num_partitions` / `num_sub_vectors` / etc. that LanceDB's `index_stats()`
-  does not round-trip).
-
-Shape (version 2 — namespaced by collection):
-
-```json
-{
-  "version": 2,
-  "collections": {
-    "videos": {
-      "vector_fields": {
-        "text_openai": {
-          "name": "text_openai",
-          "dim": 1536,
-          "column": "__vec_text_openai",
-          "description": "text-embedding-3-small",
-          "index": {
-            "type": "IVF_PQ",
-            "metric": "cosine",
-            "num_partitions": 256,
-            "num_sub_vectors": 16
-          }
-        }
-      },
-      "property_columns": ["title", "views", "tags"]
-    },
-    "images": {
-      "vector_fields": {"...": "..."},
-      "property_columns": ["..."]
-    }
-  }
-}
-```
+Writes go through LanceDB's `replace_field_metadata` and `add_columns`,
+both of which update the Lance manifest transactionally and are retried
+on commit conflict via `_with_retry`.
 
 Backends never see the root `SchemaRegistry` directly — they receive a
-`CollectionRegistry` proxy that scopes all reads/writes to a single collection.
-This keeps the backend code identical whether it's operating on collection A
-or collection B.
+`CollectionRegistry` proxy that scopes all reads/writes to a single
+collection, keeping backend code identical whether it is operating on
+collection A or B.
 
-Writes go through `os.replace(tmp, final)` for atomicity. The registry
-assumes a single writer — there is no file-level lock.
+### Why Arrow field metadata, not a JSON sidecar?
 
-### Why JSON sidecar, not a Lance metadata table?
+Storing registry state in the Lance manifest gives:
 
-The registry is ~1 KB of config-shaped data read on every `ObjectVectorDB`
-method call. A JSON file loads in microseconds, versions cleanly in git for
-test repos, is human-inspectable, and avoids creating a second Lance dataset
-just to store a handful of settings. A Lance-table registry would introduce
-bootstrap problems (how do you read the registry before it exists?) and
-force every registry read through the LanceDB query engine, for no gain.
+- **Atomic schema mutations** — every registry write is a manifest commit,
+  so it cannot diverge from the column it describes.
+- **Conflict-retried concurrency** — Lance retries manifest commits on
+  conflict, which means concurrent `register_vector_field` calls converge
+  without a file-level lock.
+- **No bootstrap problem** — the manifest already exists as soon as the
+  table does; there is no separate "create the registry" step.
+- **S3 / object-store native** — no second code path for non-POSIX URIs.
 
-If multi-writer support is ever required, the registry abstraction is
-localized enough that switching to a transactional Lance table at
-`<uri>/_registry` is a single-file change behind `SchemaRegistry`.
+The earlier design used a JSON file next to the Lance directory, which
+required filesystem semantics (`pathlib`, `os.replace`) and carried a
+TOCTOU window between the registry write and the table write. Migrating
+to Arrow field metadata closed that entire class of bugs.
 
 ## Column naming convention
 
@@ -373,9 +346,9 @@ safe for `add`, `update`, `upsert`, `delete`, and schema mutations
   Vector field metadata is stored in Arrow field metadata on the `__vec_<name>`
   column; updates go through `replace_field_metadata`, which uses the Lance
   transactional manifest.
-- **Registry**: the old JSON sidecar is gone. Vector field records now live
-  in Arrow field metadata inside the Lance manifest, which is conflict-retried
-  automatically by LanceDB.
+- **Registry**: vector field records live in Arrow field metadata inside the
+  Lance manifest, which is conflict-retried automatically by LanceDB. No
+  on-disk state outside the manifest.
 
 ### Remaining limitations
 

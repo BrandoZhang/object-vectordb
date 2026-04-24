@@ -175,10 +175,14 @@ reference and examples.
 
 ## Concurrency
 
-The library is **single-writer**. Concurrent readers are safe; concurrent
-writers are not (LanceDB's table-level writes and our JSON registry sidecar
-both assume a single writer). For production multi-writer setups, route
-writes through a single worker process (e.g. a queue consumer).
+Concurrent readers are always safe. Writes against distinct ids, and
+updates / upserts against the same *existing* row, are multi-writer safe;
+schema mutations retry on manifest conflicts. The one remaining caveat is
+same-id concurrent inserts, which can produce duplicate rows because
+Lance has no primary-key enforcement. For strict same-id uniqueness under
+concurrency, put a serialization point in front of the SDK — typically a
+single write-service process per URI. See `docs/concurrency.md` for the
+full design discussion and a reference architecture.
 
 ## What the library does NOT do
 

@@ -251,15 +251,6 @@ store.
   writers through a single `Collection`, you are relying on Lance's
   internal synchronization.
 
-- **Migration is silently skipped on object-store URIs.**
-  `_migrate_sidecar_if_needed` uses `pathlib.Path(uri).exists()`, which
-  returns `False` for `s3://…` and similar URIs.  A user migrating an
-  existing local Lance directory to S3 will not get the
-  sidecar → Arrow-field-metadata migration and their collections will not
-  be discoverable by `list_collections()`.  A proper fix is tracked
-  separately; for now, run the migration against a local mount before
-  uploading to object storage.
-
 ## Choosing an approach
 
 | Requirement                                       | Recommended approach                          |

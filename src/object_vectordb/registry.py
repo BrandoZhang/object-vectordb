@@ -14,15 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
 
-REGISTRY_FILENAME = "object_vectordb_registry.json"
 VECTOR_COLUMN_PREFIX = "__vec_"
 _OBJECT_ID_COLUMN = "object_id"
 
@@ -89,81 +86,16 @@ def _is_ovdb_table(table) -> bool:
         return False
 
 
-def _migrate_sidecar_if_needed(uri: str, db) -> None:
-    """One-time migration from old JSON sidecar to Arrow field metadata.
-
-    Reads the old registry JSON, writes ovdb metadata onto each vector column via
-    replace_field_metadata, adds the sentinel to object_id, then deletes the sidecar.
-    Silently continues on read-only filesystems or partially-migrated states.
-    """
-    sidecar = Path(uri) / REGISTRY_FILENAME
-    if not sidecar.exists():
-        return
-    try:
-        with sidecar.open() as f:
-            data = json.load(f)
-    except Exception as exc:
-        log.warning("Migration: could not read sidecar %s: %s", sidecar, exc)
-        return
-
-    collections: dict[str, Any] = data.get("collections", {})
-    for coll_name, coll_data in collections.items():
-        if coll_name not in db.table_names():
-            continue
-        try:
-            table = db.open_table(coll_name)
-        except Exception as exc:
-            log.warning("Migration: could not open table %r: %s", coll_name, exc)
-            continue
-
-        existing_cols = {f.name for f in table.schema}
-
-        for vf_name, vf_rec in coll_data.get("vector_fields", {}).items():
-            col = VECTOR_COLUMN_PREFIX + vf_name
-            if col not in existing_cols:
-                continue
-            idx = vf_rec.get("index")
-            meta = {
-                _META_DIM: str(vf_rec["dim"]),
-                _META_DESC: vf_rec.get("description") or "",
-                _META_INDEX: json.dumps(idx, sort_keys=True) if idx else "",
-            }
-            try:
-                _with_retry(table.replace_field_metadata, col, meta)
-            except Exception as exc:
-                log.warning(
-                    "Migration: could not update metadata for %r.%r: %s", coll_name, col, exc
-                )
-
-        try:
-            _with_retry(
-                table.replace_field_metadata,
-                _OBJECT_ID_COLUMN,
-                {SCHEMA_SENTINEL_KEY: SCHEMA_SENTINEL_VALUE},
-            )
-        except Exception as exc:
-            log.warning("Migration: could not write sentinel for %r: %s", coll_name, exc)
-
-    try:
-        os.remove(sidecar)
-        log.info("Migrated registry sidecar at %s to Arrow field metadata.", sidecar)
-    except PermissionError:
-        log.warning("Migration: could not remove sidecar %s (read-only?); skipping.", sidecar)
-    except Exception as exc:
-        log.warning("Migration: could not remove sidecar %s: %s", sidecar, exc)
-
-
 class SchemaRegistry:
     """Collection-level operations backed by table_names() and field-metadata sentinels.
 
-    Unlike the old JSON-sidecar SchemaRegistry, this class holds no on-disk state.
-    Collection discovery uses db.table_names() filtered by the ovdb sentinel.
+    Holds no on-disk state: collection discovery uses db.table_names() filtered
+    by the `ovdb_schema_version` sentinel on each table's object_id field.
     """
 
     def __init__(self, uri: str, db) -> None:
         self._uri = uri
         self._db = db
-        _migrate_sidecar_if_needed(uri, db)
 
     def collection(self, name: str) -> CollectionRegistry:
         return CollectionRegistry()
@@ -187,7 +119,7 @@ class SchemaRegistry:
             return False
 
     def drop_collection(self, name: str) -> None:
-        pass  # No sidecar state to clean up; table is dropped by db.py.
+        pass  # No registry state to clean up; table is dropped by db.py.
 
 
 class CollectionRegistry:
