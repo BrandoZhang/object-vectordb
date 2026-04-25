@@ -74,9 +74,7 @@ jobs:
         with:
           files: coverage.xml
           fail_ci_if_error: false  # don't gate CI on Codecov flakes
-          # CODECOV_TOKEN is auto-detected for public repos via OIDC; for
-          # private repos add it as a repo secret and uncomment:
-          # token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   build:
     name: Build sdist + wheel
