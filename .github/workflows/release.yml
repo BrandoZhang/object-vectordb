@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build + GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Verify tag matches pyproject.toml version
+        run: |
+          TAG="${GITHUB_REF##refs/tags/}"          # e.g. v0.1.0
+          EXPECTED="v$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          if [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::Tag '$TAG' does not match pyproject.toml version ('$EXPECTED'). Bump pyproject.toml first."
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            Source distribution and wheel attached. To install from this
+            release, download the wheel and `pip install <wheel>` — or
+            install from the repo at this tag with
+            `pip install git+https://github.com/BrandoZhang/object-vectordb@${{ github.ref_name }}`.
+
+            Once a PyPI publish step is wired up (trusted publishing
+            via OIDC, no token), `pip install object-vectordb==${{ github.ref_name }}`
+            will work directly.
+
+      # PyPI publishing is opt-in — uncomment and configure trusted publishing
+      # at https://pypi.org/manage/account/publishing/ to enable.
+      #
+      # - name: Publish to PyPI
+      #   uses: pypa/gh-action-pypi-publish@release/v1
+      #   with:
+      #     packages-dir: dist/

@@ -210,6 +210,21 @@ uv run pytest -q          # full test suite
 uv run ruff check src tests
 ```
 
+## Releases
+
+[SemVer 2.0](https://semver.org/spec/v2.0.0.html) for the human-facing
+version (`MAJOR.MINOR.PATCH` in `pyproject.toml`); pre-release artifacts
+from `main` use PEP 440 `0.X.Y.devN` (Python's accepted form).
+
+- **Every PR** that touches `src/` or `pyproject.toml` must bump the version
+  (CI's `version-check.yml` enforces strict-greater than `main`).
+- **Every push to `main`** auto-builds an sdist + wheel as a GitHub
+  pre-release (`v<base>.dev<run_number>`).
+- **Formal releases** are cut by tagging `vX.Y.Z`; CI verifies the tag
+  matches `pyproject.toml` and creates a GitHub Release.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the per-version log.
+
 ## License
 
 [Apache License 2.0](LICENSE). Copyright 2026 The object-vectordb Authors.

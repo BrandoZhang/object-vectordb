@@ -1,0 +1,86 @@
+name: Pre-release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write  # for creating GitHub Releases + uploading assets
+
+concurrency:
+  group: pre-release-${{ github.ref }}
+  cancel-in-progress: false  # don't cancel a build mid-publish
+
+jobs:
+  pre-release:
+    name: Build dev artifact + GitHub pre-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Compute dev version (PEP 440)
+        id: ver
+        run: |
+          BASE=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          DEV="${BASE}.dev${{ github.run_number }}"
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "base=${BASE}"          >> "$GITHUB_OUTPUT"
+          echo "dev=${DEV}"            >> "$GITHUB_OUTPUT"
+          echo "tag=v${DEV}"           >> "$GITHUB_OUTPUT"
+          echo "sha=${SHORT_SHA}"      >> "$GITHUB_OUTPUT"
+
+      - name: Override version in pyproject.toml (build-only; not committed)
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path("pyproject.toml")
+          text = path.read_text()
+          text = re.sub(
+              r'^version = "[^"]+"',
+              f'version = "${{ steps.ver.outputs.dev }}"',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          path.write_text(text)
+          PY
+          grep -E '^version = ' pyproject.toml
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Upload artifacts to workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ steps.ver.outputs.dev }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Create GitHub pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: "Pre-release ${{ steps.ver.outputs.dev }}"
+          prerelease: true
+          files: dist/*
+          target_commitish: ${{ github.sha }}
+          body: |
+            Automatic pre-release built from `main` at commit `${{ steps.ver.outputs.sha }}`.
+
+            - Base version (from `pyproject.toml`): `${{ steps.ver.outputs.base }}`
+            - Dev build number: `${{ github.run_number }}`
+            - Resolved version: `${{ steps.ver.outputs.dev }}`
+
+            Pre-releases are built on every push to `main`. Formal releases are
+            cut by tagging `vX.Y.Z` (see `.github/workflows/release.yml`).

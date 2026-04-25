@@ -1,6 +1,6 @@
 [project]
 name = "object-vectordb"
-version = "0.2.0"
+version = "0.1.0"
 description = "Multimodal object store on top of LanceDB with registered vector fields and dynamic properties."
 readme = "README.md"
 requires-python = ">=3.10"

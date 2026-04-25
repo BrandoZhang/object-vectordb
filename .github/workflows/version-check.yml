@@ -1,0 +1,71 @@
+name: Version check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  version-bumped:
+    name: pyproject version bumped vs. main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need history to diff against main
+
+      - name: Detect production code changes
+        id: scope
+        run: |
+          # Require a version bump only if production code changed.
+          # Pure-docs / pure-CI / pure-test PRs are exempt.
+          if git diff --name-only "origin/${{ github.base_ref }}"...HEAD \
+              | grep -E '^(src/|pyproject\.toml$)' > /dev/null; then
+            echo "needs_bump=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_bump=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.scope.outputs.needs_bump == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compare versions (PEP 440 ordering)
+        if: steps.scope.outputs.needs_bump == 'true'
+        run: |
+          python -m pip install --quiet packaging
+          python <<'PY'
+          import subprocess, sys, tomllib
+          from packaging.version import Version
+
+          def read_version(text: str) -> str:
+              return tomllib.loads(text)["project"]["version"]
+
+          with open("pyproject.toml", "rb") as f:
+              pr_version = read_version(f.read().decode())
+
+          base = "origin/${{ github.base_ref }}"
+          main_text = subprocess.check_output(
+              ["git", "show", f"{base}:pyproject.toml"], text=True
+          )
+          main_version = read_version(main_text)
+
+          print(f"PR version:   {pr_version}")
+          print(f"main version: {main_version}")
+
+          if Version(pr_version) <= Version(main_version):
+              print(
+                  f"::error::Version in pyproject.toml must be bumped from "
+                  f"{main_version} (currently {pr_version}).",
+                  file=sys.stderr,
+              )
+              print(
+                  "::error::SemVer 2.0: bump PATCH for fixes, MINOR for "
+                  "non-breaking features, MAJOR for breaking changes.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(f"OK: {pr_version} > {main_version}")
+          PY

@@ -89,3 +89,28 @@ Logic is in `scoring.py`. If you add a new metric, add a calibration test in `te
 - Develop on feature branches (current active branch: `claude/multimodal-object-store-ryKw0`). Never force-push to `main`.
 - CI must be green before merging. The format check is part of lint.
 - The commit trailer `https://claude.ai/code/session_...` is added automatically when Claude Code creates commits — leave it in place.
+
+## Versioning and releases
+
+[SemVer 2.0](https://semver.org/spec/v2.0.0.html) for the human-facing
+version (`MAJOR.MINOR.PATCH` in `pyproject.toml`). Pre-release artifacts
+produced from `main` use PEP 440 `0.X.Y.devN` (Python's accepted form).
+
+Three CI workflows govern the release lifecycle:
+
+1. **`.github/workflows/version-check.yml`** — runs on every PR targeting `main`. Fails if `pyproject.toml`'s version is not strictly greater (PEP 440 ordering) than `main`'s, *and* the PR touched `src/` or `pyproject.toml`. Pure-docs / pure-tests / pure-CI PRs are exempt.
+2. **`.github/workflows/pre-release.yml`** — runs on every push to `main`. Builds an sdist + wheel with the version overridden to `<base>.dev<run_number>`, uploads them as workflow artifacts, and publishes a GitHub pre-release tagged `v<base>.dev<run_number>`. The override is build-time only; `pyproject.toml` on disk is unchanged.
+3. **`.github/workflows/release.yml`** — runs when a `v*.*.*` tag is pushed. Verifies the tag matches `pyproject.toml`'s version exactly, builds, and creates a non-pre GitHub Release with auto-generated notes.
+
+PyPI publishing is *not* wired up. The `release.yml` file contains a commented-out `pypa/gh-action-pypi-publish` step; enable it after configuring trusted publishing on PyPI (no API token needed).
+
+Cutting a real release:
+
+```bash
+# 1. Bump the version in pyproject.toml on a PR (triggers version-check).
+# 2. Merge the PR. Pre-release fires automatically.
+# 3. From a clean main checkout, tag and push:
+git tag v0.1.0
+git push origin v0.1.0
+# release.yml builds + publishes the GitHub Release.
+```

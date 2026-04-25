@@ -1,94 +1,60 @@
 # Changelog
 
-## 0.2.0 (2026-04-24)
+Versioning follows [SemVer 2.0](https://semver.org/spec/v2.0.0.html). Pre-release
+artifacts produced from `main` use the PEP 440 `0.X.Y.devN` form (Python's
+nearest equivalent to a SemVer pre-release).
 
-### Breaking changes
+## 0.1.0 (2026-04-25) — initial release
 
-- **`on_missing` removed from `update()` and `batch_update()`.**
-  `update()` now always raises `ObjectNotFound` when the target id is absent;
-  there is no silent skip or implicit insert path.
-  Use `upsert()` for insert-if-missing semantics.
+First tagged release. The library exposes an object-centric API
+(`ObjectVectorDB` → `Collection` → `LanceDBBackend`) with multi-named
+vector fields per object, dynamic property schema, zero-copy schema
+evolution on the Lance manifest, and per-metric similarity scoring.
 
-- **Registry format: Arrow field metadata, no sidecar.**
-  Vector field records (dim, description, index config) are stored in the
-  Arrow field metadata of each `__vec_<name>` column inside the Lance
-  manifest; collection ownership is marked by an `ovdb_schema_version`
-  sentinel on the `object_id` field.  There is no on-disk registry state
-  outside the Lance manifest.
+### Features
 
-- **`OnMissing` type removed** from `object_vectordb.types` and from the public
-  `__all__` export.
+- **Public surface**: `ObjectVectorDB`, `Collection`, dataclasses
+  (`ObjectAdd`, `ObjectData`, `ObjectUpdate`, `SearchResult`,
+  `VectorFieldInfo`, `IndexInfo`), `rrf_merge`, and the typed exception
+  hierarchy (`ObjectVectorDBError` and friends).
+- **Per-collection schema isolation.** Two collections at the same URI can
+  register the same vector field at different dimensionalities without
+  colliding.
+- **Object lifecycle**: `add` / `batch_add` / `get` / `batch_get` / `exists`
+  / `delete`, plus `update` / `batch_update` (merge semantics, raise on
+  missing) and `upsert` (insert-if-missing with merge semantics).
+- **Schema evolution**: `register_vector_field`, `drop_fields`,
+  `rename_field`, `schema()`. All zero-copy via Lance manifest changes;
+  registry state is encoded in Arrow field metadata
+  (`ovdb_dim` / `ovdb_description` / `ovdb_index`) on the
+  `__vec_<name>` columns plus a `ovdb_schema_version` sentinel on
+  `object_id`. No JSON sidecar.
+- **Search**: `search` (top-k ANN), `search_within` (radius / distance-bounded),
+  `export_vectors` (bulk read), `list_objects` (filter + paginate).
+  Per-metric score conversion (`cosine` / `l2` / `dot`); `MetricMismatch`
+  raised when caller's metric conflicts with an existing index.
+- **Index management**: `create_index` / `rebuild_index` / `drop_index` /
+  `index_info`. Auto-created `BTREE` scalar index on `object_id` so point
+  lookups are O(log N) from the first write.
+- **Multi-writer support.** Schema mutations retry on Lance manifest
+  commit conflicts via `_with_retry` (5 attempts, 50–800 ms backoff).
+  `add` / `update` / `batch_update` use Lance's `MergeResult` row counts
+  to detect duplicates and missing rows without TOCTOU windows.
+  Distinct-id writes and updates/upserts against existing rows are
+  multi-writer safe; same-id concurrent inserts can still produce
+  duplicates because Lance treats unmatched `merge_insert` as commutative
+  append — see `docs/concurrency.md` for the full multi-writer story and
+  the `storage_options` knob for object-store deployments.
+- **Hybrid retrieval helper**: `rrf_merge` for fusing multiple
+  `SearchResult` lists (e.g., one text-vector, one image-vector).
 
-### New features
+### Documentation
 
-- **`storage_options` passthrough on `ObjectVectorDB(uri=…, storage_options=…)`.**
-  Forwarded to `lancedb.connect`.  Required for multi-writer deployments
-  against S3 / object stores so Lance can coordinate manifest commits
-  (conditional PUT, external commit lock, etc.).  Without it, concurrent
-  writers to the same object-store URI can silently clobber each other's
-  manifest commits.  See docs/concurrency.md.
+`docs/` covers concepts, architecture, full API reference, filter
+syntax, comparison with other vector DBs, concurrency, and testing.
+Performance baselines are in the README's Performance section, with
+quick-tier benchmarks at dim=1024 recorded against post-BTREE numbers.
 
-- **Multi-writer support.**
-  - `add()` and `batch_add()` use `MergeResult.num_inserted_rows` instead of a
-    pre-check `count_rows` query to detect duplicate ids.  No TOCTOU window.
-  - `update()` uses `MergeResult.num_updated_rows` (and `UpdateResult.rows_updated`
-    for null-scalar clears) to detect missing rows.  No TOCTOU window.
-  - `batch_update()` performs a single batch existence check (one `IN (...)` query
-    for all ids) instead of N per-row `exists()` calls.
-  - Schema mutations (`register_vector_field`, `set_index`, `drop_fields`,
-    `rename_field`, `create_index`) use `_with_retry` to handle Lance manifest
-    commit conflicts with bounded exponential backoff (5 attempts, 50–800 ms).
-  - Concurrent `add_columns` calls for the same column name are idempotent
-    ("column already exists" errors are swallowed).
-  - Concurrent `create_table` for the same collection name no longer
-    races — one writer creates, the rest fall through to `open_table`.
-  - Concurrent `register_vector_field` (or auto-register) with **different
-    dims** now detects the mismatch after the "already exists" race and
-    raises `DimensionMismatch`, rather than writing conflicting dim
-    metadata over the actual column type.
-  - `batch_update` now checks `MergeResult.num_updated_rows` per
-    column-signature group (and `UpdateResult.rows_updated` on null-clear
-    ops) to catch rows deleted concurrently between the pre-check and the
-    write.  Previously the batch silently skipped those rows.
-  - `_ensure_object_id_index` is now best-effort on existing tables:
-    read-only readers (or concurrent writers racing on first open) no
-    longer crash.  On newly-created tables it is still required.
-  - Property-column type race: concurrent `add` / `update` calls against
-    the same new property name with different inferred Arrow types now
-    raise `SchemaError` on the losing writer (covering both Lance's
-    "already exists" and "type conflicts" error forms) instead of
-    silently coercing one writer's value into the other writer's column
-    type.  See `_verify_property_column_type`.
-  - Scalar-index creation for `object_id` is now wrapped in `_with_retry`
-    and treats "already exists" as success unconditionally, so
-    concurrent first-open of a brand-new table no longer races on
-    `create_scalar_index`.
-  - `"already exists"` string-matching is consolidated behind a single
-    `_is_already_exists` helper that also probes for typed exceptions at
-    import time, reducing the blast radius of a future LanceDB error
-    format change.
+### License
 
-- **`upsert()` remains the only insert-if-missing path.**
-  Callers that previously used `update(..., on_missing="insert")` should switch to
-  `upsert()`.  Merge semantics are unchanged: existing fields not in the call are
-  preserved; missing rows are inserted as partial rows.
-
-### Notes
-
-- **Same-id concurrent inserts are still best-effort.**
-  Lance treats no-match `merge_insert` as a commutative append, so two writers
-  that both observe "no row" at read time will both commit, producing duplicate
-  rows.  `add()` raises `DuplicateObject` whenever the row was visible at read
-  time, closing the old `exists()`→write TOCTOU, but it does not prevent two
-  racing inserts from both landing.  Use an external lock when strict same-id
-  uniqueness is required under concurrency.  Writes to distinct ids, and
-  updates/upserts against the same *existing* row, are fully safe.
-
-- **`batch_update` is still not atomic across column-signature groups.**
-  A `batch_update` whose rows have differing column sets executes as N independent
-  `merge_insert` calls.  Each call is atomic and conflict-retried; the batch as a
-  whole is not.  For full atomicity, issue homogeneous batches (same columns for
-  every row).
-
-- **`lancedb` minimum version bumped to `0.30.0`** (`MergeResult` with named fields
-  is required).
+Apache 2.0.
