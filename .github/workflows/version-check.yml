@@ -37,19 +37,49 @@ jobs:
           python -m pip install --quiet packaging
           python <<'PY'
           import subprocess, sys, tomllib
-          from packaging.version import Version
+          from packaging.version import InvalidVersion, Version
 
-          def read_version(text: str) -> str:
-              return tomllib.loads(text)["project"]["version"]
+          def read_version(text: str) -> str | None:
+              data = tomllib.loads(text)
+              return data.get("project", {}).get("version")
+
+          def assert_valid(version: str) -> None:
+              try:
+                  Version(version)
+              except InvalidVersion as exc:
+                  print(f"::error::PR version {version!r} is not valid PEP 440: {exc}",
+                        file=sys.stderr)
+                  sys.exit(1)
 
           with open("pyproject.toml", "rb") as f:
               pr_version = read_version(f.read().decode())
+          if pr_version is None:
+              print("::error::pyproject.toml has no [project].version", file=sys.stderr)
+              sys.exit(1)
 
           base = "origin/${{ github.base_ref }}"
-          main_text = subprocess.check_output(
-              ["git", "show", f"{base}:pyproject.toml"], text=True
-          )
+          try:
+              main_text = subprocess.check_output(
+                  ["git", "show", f"{base}:pyproject.toml"],
+                  text=True,
+                  stderr=subprocess.DEVNULL,
+              )
+          except subprocess.CalledProcessError:
+              # First-release scenario: main has no pyproject.toml yet. Any
+              # valid PEP 440 version is acceptable as the initial version.
+              assert_valid(pr_version)
+              print(f"OK: no pyproject.toml on {base}; PR version {pr_version} accepted "
+                    "as the initial version.")
+              sys.exit(0)
+
           main_version = read_version(main_text)
+          if main_version is None:
+              # main has a pyproject.toml but no [project].version field —
+              # same handling as the first-release scenario.
+              assert_valid(pr_version)
+              print(f"OK: no [project].version on {base}; PR version {pr_version} "
+                    "accepted as the initial version.")
+              sys.exit(0)
 
           print(f"PR version:   {pr_version}")
           print(f"main version: {main_version}")
