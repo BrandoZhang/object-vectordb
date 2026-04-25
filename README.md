@@ -212,7 +212,9 @@ uv run ruff check src tests
 
 ## License
 
-MIT (or project default).
+[Apache License 2.0](LICENSE). Copyright 2026 The object-vectordb Authors.
+The `NOTICE` file at the repo root carries the attribution required by §4(d)
+of the license.
 
 ## Docs
 
