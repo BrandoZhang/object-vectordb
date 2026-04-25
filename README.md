@@ -1,6 +1,7 @@
 # object-vectordb
 
 [![CI](https://github.com/BrandoZhang/object-vectordb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BrandoZhang/object-vectordb/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/BrandoZhang/object-vectordb/graph/badge.svg?branch=main)](https://codecov.io/gh/BrandoZhang/object-vectordb)
 
 Multimodal object store built on [LanceDB](https://lancedb.com). Manages objects with
 an evolving dynamic property schema and multiple named embedding vectors per object.

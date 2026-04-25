@@ -57,7 +57,26 @@ jobs:
         run: uv sync --all-extras --frozen --python ${{ matrix.python-version }}
 
       - name: Run pytest
-        run: uv run --python ${{ matrix.python-version }} pytest -q --durations=10
+        run: |
+          # Collect coverage on the 3.11 matrix only — coverage merging across
+          # Python versions is unreliable with pytest-cov, and three uploads to
+          # Codecov for the same commit just clutters the dashboard.
+          if [ "${{ matrix.python-version }}" = "3.11" ]; then
+            uv run --python ${{ matrix.python-version }} pytest -q --durations=10 \
+                --cov=src/object_vectordb --cov-report=xml --cov-report=term
+          else
+            uv run --python ${{ matrix.python-version }} pytest -q --durations=10
+          fi
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11' && !cancelled()
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false  # don't gate CI on Codecov flakes
+          # CODECOV_TOKEN is auto-detected for public repos via OIDC; for
+          # private repos add it as a repo secret and uncomment:
+          # token: ${{ secrets.CODECOV_TOKEN }}
 
   build:
     name: Build sdist + wheel
